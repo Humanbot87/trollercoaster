@@ -27,13 +27,15 @@
         footer { padding: 40px; text-align: center; background: #0c0214; border-top: 1px solid var(--neon); }
         .social-links a { color: #fff; font-size: 2rem; margin: 0 15px; transition: 0.3s; }
         .social-links a:hover { color: var(--pink); }
-        .btn { background: var(--neon); color: white; padding: 15px 30px; border-radius: 50px; text-decoration: none; font-weight: bold; cursor: pointer; }
+        .btn { background: var(--neon); color: white; padding: 15px 30px; border-radius: 50px; text-decoration: none; font-weight: bold; cursor: pointer; border: none; }
     </style>
 </head>
 <body>
 
+    <img id="egg" src="1779204793002.png" style="display:none; position:fixed; width:80px; z-index:9999;" onclick="alert('U MAD BRO? PROBLEM?')">
+
     <div class="hero">
-        <img src="84450.jpg" alt="Troller Coaster" class="hero-glow-img">
+        <img src="84450.png" alt="Troller Coaster" class="hero-glow-img">
         <h1>TROLLER COASTER</h1>
         <p>THE WILDEST RIDE ON SOLANA</p>
         <a href="https://pump.fun/coin/DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump" class="btn">BUY $TROLLER</a>
@@ -83,6 +85,15 @@
             navigator.clipboard.writeText(ca);
             alert('CA in Zwischenablage kopiert!');
         }
+        
+        // Easter Egg Timer
+        setInterval(() => {
+            const e = document.getElementById('egg');
+            e.style.display = 'block';
+            e.style.left = Math.random() * 80 + '%';
+            e.style.top = Math.random() * 80 + '%';
+            setTimeout(() => e.style.display = 'none', 3000);
+        }, 15000);
     </script>
 </body>
 </html>
