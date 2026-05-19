@@ -839,6 +839,12 @@
   <p>© Troller Coaster 2026 — Problem?</p>
 </footer>
 
+<!-- TROLL POPUP ON COPY -->
+<div id="troll-popup" style="display:none;position:fixed;top:50%;left:50%;z-index:9500;flex-direction:column;align-items:center;gap:14px;pointer-events:none;">
+  <img src="1779204793002.png" alt="Problem?" style="width:200px;height:200px;border-radius:50%;border:3px solid var(--pink);box-shadow:0 0 40px var(--pink),0 0 80px rgba(255,0,255,0.4);">
+  <span style="font-family:'Orbitron',sans-serif;font-size:1.4rem;font-weight:900;color:var(--pink);text-shadow:0 0 20px var(--pink);letter-spacing:3px;">PROBLEM?</span>
+</div>
+
 <!-- CORNER TROLLFACE TRIGGER -->
 <div class="troll-corner" id="trollBtn" title="Problem?">
   <img src="1779204793002.png" alt="Problem?" style="width:60px;height:60px;border-radius:50%;display:block;">
@@ -861,7 +867,28 @@
 
   // COPY CA
   function copyCA() {
-    navigator.clipboard.writeText(document.getElementById('ca-text').innerText).then(() => toast('CA Copied! Problem?'));
+    navigator.clipboard.writeText(document.getElementById('ca-text').innerText).then(() => {
+      toast('CA Copied! Problem?');
+      showTrollPopup();
+    });
+  }
+
+  function showTrollPopup() {
+    const popup = document.getElementById('troll-popup');
+    popup.style.display = 'flex';
+    popup.style.opacity = '0';
+    popup.style.transform = 'translate(-50%, -50%) scale(0.5)';
+    requestAnimationFrame(() => {
+      popup.style.transition = 'opacity 0.2s, transform 0.3s cubic-bezier(.15,1.4,.5,1)';
+      popup.style.opacity = '1';
+      popup.style.transform = 'translate(-50%, -50%) scale(1)';
+    });
+    setTimeout(() => {
+      popup.style.transition = 'opacity 0.3s, transform 0.3s';
+      popup.style.opacity = '0';
+      popup.style.transform = 'translate(-50%, -50%) scale(0.8)';
+      setTimeout(() => { popup.style.display = 'none'; }, 320);
+    }, 2200);
   }
 
   // TOAST
