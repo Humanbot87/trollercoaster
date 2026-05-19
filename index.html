@@ -495,10 +495,7 @@
 
 <!-- NAV -->
 <nav>
-  <a href="#" class="nav-logo">
-    <svg class="icon" width="22" height="17" style="color:var(--pink)"><use href="#i-coaster"/></svg>
-    TROLLER COASTER
-  </a>
+  <a href="#" class="nav-logo">TROLLER COASTER</a>
   <ul class="nav-links">
     <li><a href="#about">About</a></li>
     <li><a href="#chart">Chart</a></li>
@@ -698,7 +695,7 @@
       </div>
       <iframe
         id="dex-iframe"
-        src="https://dexscreener.com/solana/3ktgrxrxnvpkfscz7w2ejbmgexjgr6jd21xb6b8cv6pk?embed=1&theme=dark&trades=0&info=0"
+        data-src="https://dexscreener.com/solana/3ktgrxrxnvpkfscz7w2ejbmgexjgr6jd21xb6b8cv6pk?embed=1&theme=dark&trades=0&info=0"
         style="width:100%;height:500px;border:none;display:none;background:#05010a;"
         title="$TROLLER Live Chart"
         onload="document.getElementById('chart-skeleton').style.display='none';this.style.display='block';">
@@ -936,6 +933,16 @@
     toast('PROBLEM?');
   });
 
+
+  // LAZY LOAD DEXSCREENER
+  const dexIframe = document.getElementById('dex-iframe');
+  const dexObs = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) {
+      dexIframe.src = dexIframe.dataset.src;
+      dexObs.disconnect();
+    }
+  }, { threshold: 0.1 });
+  dexObs.observe(dexIframe);
 
   // NAV SCROLL
   window.addEventListener('scroll', () => {
