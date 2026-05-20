@@ -65,13 +65,14 @@ async function swapSolForTroller(solAmount) {
       const ppRes = await axios.post(
         'https://pumpportal.fun/api/trade-local',
         {
-          action:      'buy',
-          mint:        TROLLER_MINT,
-          amount:      solAmount,
-          slippage:    slippagePct,
-          priorityFee: priorityFee,
-          pool:        'pump-amm',
-          publicKey:   WALLET_KEYPAIR.publicKey.toBase58(),
+          action:           'buy',
+          mint:             TROLLER_MINT,
+          amount:           solAmount,
+          denominatedInSol: 'true',
+          slippage:         slippagePct,
+          priorityFee:      priorityFee,
+          pool:             'pump-amm',
+          publicKey:        WALLET_KEYPAIR.publicKey.toBase58(),
         },
         { responseType: 'arraybuffer', timeout: 12000 }
       );
