@@ -1,0 +1,17 @@
+{
+  "name": "troller-burn-bot",
+  "version": "1.0.0",
+  "description": "Auto-buys and burns $TROLLER when SOL hits the wallet",
+  "main": "burn-bot.js",
+  "scripts": {
+    "start": "node burn-bot.js",
+    "pm2": "pm2 start burn-bot.js --name burn-bot"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.4",
+    "@solana/spl-token": "^0.4.9",
+    "axios": "^1.7.9",
+    "bs58": "^5.0.0",
+    "dotenv": "^16.4.7"
+  }
+}
