@@ -526,17 +526,41 @@
         <strong style="color:var(--neon)">$TROLLER burn</strong>. Less supply. More value.
       </p>
 
-      <!-- LaunchMyNFT Embed -->
+      <!-- LaunchMyNFT Embed — eager load -->
+      <script>
+        window.ownerId = "4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB";
+        window.collectionId = "E91FUhVC1NdjGEI1n5Vf";
+      </script>
+      <link rel="stylesheet" href="https://storage.googleapis.com/scriptslmt/0.1.3/solana.css">
+      <script type="module" src="https://storage.googleapis.com/scriptslmt/0.1.3/solana.js"></script>
+
       <div id="launchmynft-embed" style="border-radius:12px;overflow:hidden;position:relative;z-index:1;">
-        <script>
-          window.ownerId = "4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB"
-          window.collectionId = "E91FUhVC1NdjGEI1n5Vf"
-        </script>
-        <script type="module" src="https://storage.googleapis.com/scriptslmt/0.1.3/solana.js"></script>
-        <link rel="stylesheet" href="https://storage.googleapis.com/scriptslmt/0.1.3/solana.css">
-        <div id="mint-counter" style="font-family:'Share Tech Mono',monospace;font-size:0.82rem;color:var(--cyan);letter-spacing:2px;text-align:center;padding:10px 0 4px;"></div>
-        <div id="mint-button-container" style="display:flex;justify-content:center;margin-top:12px;"></div>
+        <div id="nft-skeleton" style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:18px 0;">
+          <div style="width:160px;height:12px;background:rgba(157,0,255,0.15);border-radius:6px;animation:nftPulse 1.4s ease-in-out infinite;"></div>
+          <div style="width:200px;height:44px;background:rgba(157,0,255,0.12);border-radius:30px;animation:nftPulse 1.4s ease-in-out infinite 0.2s;"></div>
+        </div>
+        <style>@keyframes nftPulse{0%,100%{opacity:0.5}50%{opacity:1}}</style>
+        <div id="mint-counter" style="font-family:'Share Tech Mono',monospace;font-size:0.82rem;color:var(--cyan);letter-spacing:2px;text-align:center;padding:10px 0 4px;display:none;"></div>
+        <div id="mint-button-container" style="display:none;justify-content:center;margin-top:12px;"></div>
       </div>
+
+      <script>
+        (function(){
+          var tries=0;
+          var poll=setInterval(function(){
+            var btn=document.getElementById("mint-button-container");
+            var counter=document.getElementById("mint-counter");
+            var skeleton=document.getElementById("nft-skeleton");
+            tries++;
+            if((btn&&btn.children.length>0)||tries>60){
+              clearInterval(poll);
+              if(skeleton)skeleton.style.display="none";
+              if(btn)btn.style.display="flex";
+              if(counter)counter.style.display="block";
+            }
+          },300);
+        })();
+      </script>
 
       <!-- Badges -->
       <div class="hero-nft-strip">
