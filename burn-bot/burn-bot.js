@@ -69,6 +69,7 @@ async function swapSolForTroller(solAmount) {
           amount:      solAmount,
           slippage:    slippagePct,
           priorityFee: priorityFee,
+          pool:        'pump-amm',
           publicKey:   WALLET_KEYPAIR.publicKey.toBase58(),
         },
         { responseType: 'arraybuffer', timeout: 12000 }
