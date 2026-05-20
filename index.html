@@ -509,6 +509,7 @@
   <ul class="nav-links">
     <li><a href="#about">About</a></li>
     <li><a href="#chart">Chart</a></li>
+    <li><a href="#nft">NFT</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="#community">Community</a></li>
   </ul>
@@ -785,15 +786,64 @@
 <!-- NFT -->
 <section id="nft" style="background:var(--dark);">
   <div class="container">
-    <span class="section-tag">Coming Soon</span>
-    <h2>NFTS — <span>COMING SOON</span></h2>
+    <span class="section-tag">Mint Now</span>
+    <h2>NFTS — <span>MINT</span></h2>
     <div class="divider"></div>
-    <div class="nft-box fade-up">
-      <div class="nft-soon">NFT</div>
-      <svg class="icon nft-icon" width="52" height="52" style="color:var(--neon)"><use href="#i-diamond"/></svg>
-      <p>When we hit Phase 3, the <strong><span class="brand-troller">Troller</span> <span class="brand-coaster">Coaster</span> NFT collection</strong> drops. NFTs are purchased with <strong style="color:var(--cyan)">SOL</strong> — and every sale triggers an automatic <strong style="color:var(--neon)">$TROLLER burn</strong>. Less supply. More value. Pure deflationary pressure, built into every mint.</p>
-      <span style="position:relative;z-index:1;font-family:'Share Tech Mono',monospace;font-size:1.1rem;letter-spacing:4px;color:rgba(157,0,255,0.6);border:1px solid rgba(157,0,255,0.3);padding:12px 28px;border-radius:50px;">COMING SOON</span>
+
+    <!-- Description -->
+    <p class="fade-up" style="text-align:center;font-size:1.05rem;line-height:1.7;color:rgba(220,200,240,0.85);max-width:620px;margin:0 auto 40px;">
+      NFTs are purchased with <strong style="color:var(--cyan)">SOL</strong> — and every sale triggers an automatic <strong style="color:var(--neon)">$TROLLER burn</strong>. Less supply. More value. Pure deflationary pressure, built into every mint.
+    </p>
+
+    <!-- Mint Widget Wrapper -->
+    <div class="fade-up" style="
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 32px 24px;
+      max-width: 680px;
+      margin: 0 auto;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 0 40px rgba(157,0,255,0.15);
+    ">
+      <!-- Top accent line -->
+      <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--neon),var(--pink));"></div>
+
+      <!-- Widget header -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px;">
+        <svg class="icon" width="18" height="18" style="color:var(--neon)"><use href="#i-diamond"/></svg>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:0.8rem;letter-spacing:3px;color:var(--pink);">TROLLER COASTER NFT</span>
+        <span style="margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:0.7rem;color:rgba(157,0,255,0.5);">POWERED BY LAUNCHMYNFT</span>
+      </div>
+
+      <!-- LaunchMyNFT Embed -->
+      <div id="launchmynft-embed" style="border-radius:12px;overflow:hidden;">
+        <script>
+          window.ownerId = "4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB"
+          window.collectionId = "E91FUhVC1NdjGEI1n5Vf"
+        </script>
+        <script type="module" src="https://storage.googleapis.com/scriptslmt/0.1.3/solana.js"></script>
+        <link rel="stylesheet" href="https://storage.googleapis.com/scriptslmt/0.1.3/solana.css">
+      </div>
     </div>
+
+    <!-- Burn info badges -->
+    <div class="fade-up" style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin-top:28px;">
+      <div style="background:rgba(157,0,255,0.1);border:1px solid rgba(157,0,255,0.3);border-radius:30px;padding:8px 20px;display:flex;align-items:center;gap:8px;">
+        <svg class="icon" width="14" height="14" style="color:var(--neon)"><use href="#i-sol"/></svg>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:0.78rem;color:var(--text);">PAY WITH SOL</span>
+      </div>
+      <div style="background:rgba(255,0,255,0.08);border:1px solid rgba(255,0,255,0.3);border-radius:30px;padding:8px 20px;display:flex;align-items:center;gap:8px;">
+        <svg class="icon" width="14" height="14" style="color:var(--pink)"><use href="#i-fire"/></svg>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:0.78rem;color:var(--text);">AUTO $TROLLER BURN</span>
+      </div>
+      <div style="background:rgba(0,255,255,0.06);border:1px solid rgba(0,255,255,0.25);border-radius:30px;padding:8px 20px;display:flex;align-items:center;gap:8px;">
+        <svg class="icon" width="14" height="14" style="color:var(--cyan)"><use href="#i-lock"/></svg>
+        <span style="font-family:'Share Tech Mono',monospace;font-size:0.78rem;color:var(--text);">1 PER WALLET</span>
+      </div>
+    </div>
+
   </div>
 </section>
 
