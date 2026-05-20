@@ -1,11 +1,10 @@
 /**
- * TROLLER BURN BOT v2.0
+ * TROLLER BURN BOT v3.0
  * ----------------------
- * Monitors wallet for incoming SOL
- * → Buys $TROLLER via Jupiter (with fallback endpoints)
+ * Uses Helius Jupiter Swap API (no external DNS needed)
+ * → Monitors wallet for incoming SOL
+ * → Buys $TROLLER via Helius/Jupiter
  * → Burns $TROLLER on-chain automatically
- *
- * Token: DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump (bonded, on Raydium)
  */
 
 require('dotenv').config();
@@ -33,18 +32,16 @@ const GAS_RESERVE      = 0.01;
 const POLL_INTERVAL_MS = 5000;
 const MIN_SOL_TRIGGER  = 0.005;
 
-const RPC_URL = process.env.HELIUS_RPC || 'https://api.mainnet-beta.solana.com';
+const RPC_URL = process.env.HELIUS_RPC;
+if (!RPC_URL) { console.error('HELIUS_RPC not set in .env'); process.exit(1); }
+
+// Extract API key from Helius RPC URL
+const HELIUS_API_KEY = RPC_URL.match(/api-key=([^&]+)/)?.[1];
+if (!HELIUS_API_KEY) { console.error('Could not extract Helius API key from RPC URL'); process.exit(1); }
 
 const WALLET_KEYPAIR = Keypair.fromSecretKey(
   bs58.decode(process.env.WALLET_PRIVATE_KEY)
 );
-
-// Jupiter endpoints — tries each in order until one works
-const JUPITER_ENDPOINTS = [
-  'https://quote-api.mainnet.jup.ag/v6',
-  'https://public.jupiterapi.com/v6',
-  'https://jupiter-quote-api-node.projectserum.com/v6',
-];
 
 // ─── SETUP ────────────────────────────────────────────────────────────────────
 
@@ -55,29 +52,43 @@ let lastKnownBalance    = 0;
 let processedSignatures = new Set();
 let isProcessing        = false;
 
-// ─── LOGGING ──────────────────────────────────────────────────────────────────
-
 function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-// ─── JUPITER SWAP: SOL → $TROLLER ─────────────────────────────────────────────
+// ─── SWAP: SOL → $TROLLER via Helius Jupiter API ──────────────────────────────
 
-async function getJupiterQuote(baseUrl, lamports) {
-  const url =
-    `${baseUrl}/quote` +
-    `?inputMint=So11111111111111111111111111111111111111112` +
+async function swapSolForTroller(solAmount) {
+  const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
+  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER via Helius...`);
+
+  // Helius Jupiter Quote endpoint
+  const quoteUrl =
+    `https://mainnet.helius-rpc.com/v0/quote` +
+    `?api-key=${HELIUS_API_KEY}` +
+    `&inputMint=So11111111111111111111111111111111111111112` +
     `&outputMint=${TROLLER_MINT}` +
     `&amount=${lamports}` +
     `&slippageBps=500`;
 
-  const { data } = await axios.get(url, { timeout: 10000 });
-  return data;
-}
+  let quote;
+  try {
+    const { data } = await axios.get(quoteUrl, { timeout: 15000 });
+    quote = data;
+  } catch (err) {
+    // Fallback: try Helius swap directly via RPC sendTransaction with Jupiter serialized tx
+    throw new Error(`Helius quote failed: ${err.message}`);
+  }
 
-async function getJupiterSwap(baseUrl, quote) {
-  const { data } = await axios.post(
-    `${baseUrl}/swap`,
+  if (!quote?.outAmount) {
+    throw new Error('No quote returned: ' + JSON.stringify(quote));
+  }
+
+  log(`Quote: ${lamports} lamports → ${Number(quote.outAmount).toLocaleString()} $TROLLER`);
+
+  // Helius Jupiter Swap endpoint
+  const { data: swapData } = await axios.post(
+    `https://mainnet.helius-rpc.com/v0/swap?api-key=${HELIUS_API_KEY}`,
     {
       quoteResponse: quote,
       userPublicKey: WALLET_KEYPAIR.publicKey.toString(),
@@ -87,50 +98,26 @@ async function getJupiterSwap(baseUrl, quote) {
     },
     { timeout: 15000 }
   );
-  return data;
-}
 
-async function swapSolForTroller(solAmount) {
-  const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
-  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER...`);
-
-  let lastError;
-
-  for (const endpoint of JUPITER_ENDPOINTS) {
-    try {
-      log(`Trying endpoint: ${endpoint}`);
-
-      const quote = await getJupiterQuote(endpoint, lamports);
-      if (!quote?.outAmount) throw new Error('No quote returned');
-
-      log(`Quote OK: ${lamports} lamports → ${Number(quote.outAmount).toLocaleString()} $TROLLER`);
-
-      const swapData = await getJupiterSwap(endpoint, quote);
-      if (!swapData?.swapTransaction) throw new Error('No swap transaction');
-
-      const tx = VersionedTransaction.deserialize(
-        Buffer.from(swapData.swapTransaction, 'base64')
-      );
-      tx.sign([WALLET_KEYPAIR]);
-
-      const sig = await connection.sendRawTransaction(tx.serialize(), {
-        maxRetries: 3,
-        skipPreflight: true,
-      });
-
-      log(`Swap TX sent: ${sig}`);
-      await connection.confirmTransaction(sig, 'confirmed');
-      log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
-
-      return BigInt(quote.outAmount);
-
-    } catch (err) {
-      log(`❌ Endpoint ${endpoint} failed: ${err.message}`);
-      lastError = err;
-    }
+  if (!swapData?.swapTransaction) {
+    throw new Error('No swap transaction: ' + JSON.stringify(swapData));
   }
 
-  throw new Error(`All Jupiter endpoints failed. Last error: ${lastError?.message}`);
+  const tx = VersionedTransaction.deserialize(
+    Buffer.from(swapData.swapTransaction, 'base64')
+  );
+  tx.sign([WALLET_KEYPAIR]);
+
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    maxRetries: 3,
+    skipPreflight: true,
+  });
+
+  log(`Swap TX sent: ${sig}`);
+  await connection.confirmTransaction(sig, 'confirmed');
+  log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
+
+  return BigInt(quote.outAmount);
 }
 
 // ─── BURN $TROLLER ─────────────────────────────────────────────────────────────
@@ -187,7 +174,6 @@ async function processIncomingSOL(diffLamports, sig) {
 
   log(`\n💰 +${incomingSOL.toFixed(4)} SOL received (TX: ${sig})`);
   log(`→ Using ${solToBurn.toFixed(4)} SOL (99%) to buy & burn $TROLLER`);
-  log(`→ Keeping ${(incomingSOL * GAS_RESERVE).toFixed(4)} SOL for gas\n`);
 
   if (solToBurn < MIN_SOL_TRIGGER) {
     log(`Amount too small (${solToBurn} SOL), skipping.`);
@@ -211,24 +197,19 @@ async function processIncomingSOL(diffLamports, sig) {
 
 async function checkWallet() {
   if (isProcessing) return;
-
   try {
     const balance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
-
     if (balance > lastKnownBalance) {
       const diff   = balance - lastKnownBalance;
       const sigs   = await connection.getSignaturesForAddress(WALLET_KEYPAIR.publicKey, { limit: 3 });
       const newSig = sigs[0]?.signature;
-
       if (newSig && !processedSignatures.has(newSig)) {
         processedSignatures.add(newSig);
-        if (processedSignatures.size > 200) {
+        if (processedSignatures.size > 200)
           processedSignatures.delete(processedSignatures.values().next().value);
-        }
         await processIncomingSOL(diff, newSig);
       }
     }
-
     lastKnownBalance = balance;
   } catch (err) {
     log(`Poll error: ${err.message}`);
@@ -239,22 +220,38 @@ async function checkWallet() {
 
 async function main() {
   log('╔══════════════════════════════════════╗');
-  log('║      TROLLER BURN BOT v2.0           ║');
+  log('║      TROLLER BURN BOT v3.0           ║');
   log('╚══════════════════════════════════════╝');
-  log(`Wallet:    ${WALLET_KEYPAIR.publicKey.toString()}`);
-  log(`$TROLLER:  ${TROLLER_MINT}`);
-  log(`Burn:      ${BURN_PERCENT * 100}%`);
-  log(`Poll:      every ${POLL_INTERVAL_MS / 1000}s`);
+  log(`Wallet:      ${WALLET_KEYPAIR.publicKey.toString()}`);
+  log(`$TROLLER:    ${TROLLER_MINT}`);
+  log(`Helius Key:  ${HELIUS_API_KEY.substring(0, 8)}...`);
   log('');
 
-  // Verify wallet
   const actual   = WALLET_KEYPAIR.publicKey.toString();
   const expected = '4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB';
   if (actual !== expected) {
-    log(`⚠️  WARNING: Wallet mismatch!`);
-    log(`   Expected: ${expected}`);
-    log(`   Got:      ${actual}`);
+    log(`⚠️  Wallet mismatch! Expected ${expected}, got ${actual}`);
     process.exit(1);
+  }
+
+  // Test Helius quote endpoint
+  log('Testing Helius Jupiter API...');
+  try {
+    const testUrl =
+      `https://mainnet.helius-rpc.com/v0/quote` +
+      `?api-key=${HELIUS_API_KEY}` +
+      `&inputMint=So11111111111111111111111111111111111111112` +
+      `&outputMint=${TROLLER_MINT}` +
+      `&amount=1000000&slippageBps=500`;
+    const { data } = await axios.get(testUrl, { timeout: 10000 });
+    if (data?.outAmount) {
+      log(`✅ Helius Jupiter API working! Test quote: ${Number(data.outAmount).toLocaleString()} $TROLLER per 0.001 SOL`);
+    } else {
+      log(`⚠️  Helius quote returned unexpected data: ${JSON.stringify(data)}`);
+    }
+  } catch (err) {
+    log(`⚠️  Helius Jupiter test failed: ${err.message}`);
+    log('    Bot will still run but swaps may fail.');
   }
 
   lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
