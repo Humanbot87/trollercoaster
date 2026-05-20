@@ -1,10 +1,7 @@
 /**
- * TROLLER BURN BOT v4.1
+ * TROLLER BURN BOT v4.2
  * ----------------------
- * Uses PumpPortal API for swaps
- * → Monitors wallet for incoming SOL
- * → Buys $TROLLER via PumpPortal (Raydium pool)
- * → Burns $TROLLER on-chain automatically
+ * Uses PumpPortal API (exact same format as house-bot)
  */
 
 require('dotenv').config();
@@ -51,60 +48,52 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-// ─── SWAP: SOL → $TROLLER via PumpPortal ──────────────────────────────────────
+// ─── SWAP: SOL → $TROLLER via PumpPortal (exact house-bot format) ─────────────
 
 async function swapSolForTroller(solAmount) {
   log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER via PumpPortal...`);
 
-  // PumpPortal trade-local — query params format
-  const params = new URLSearchParams({
-    action:          'buy',
-    mint:            TROLLER_MINT,
-    amount:          solAmount.toString(),
-    denominatedInSol: 'true',
-    slippage:        '25',
-    priorityFee:     '0.001',
-    pool:            'raydium',
-    publicKey:       WALLET_KEYPAIR.publicKey.toString(),
-  });
+  let serialized = null;
 
-  let txBuffer;
-  try {
-    const { data } = await axios.get(
-      `https://pumpportal.fun/api/trade-local?${params.toString()}`,
-      {
-        timeout: 15000,
-        responseType: 'arraybuffer',
-      }
-    );
-    txBuffer = Buffer.from(data);
-  } catch (err) {
-    // Try POST with form data as fallback
+  // Try with increasing slippage (same as house-bot)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const slippagePct = attempt === 1 ? 25 : attempt === 2 ? 40 : 60;
+    const priorityFee = Math.max(0.003 * attempt, 0.003);
+
     try {
-      log('GET failed, trying POST...');
-      const { data } = await axios.post(
+      const ppRes = await axios.post(
         'https://pumpportal.fun/api/trade-local',
-        params.toString(),
         {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          timeout: 15000,
-          responseType: 'arraybuffer',
-        }
+          action:      'buy',
+          mint:        TROLLER_MINT,
+          amount:      solAmount,
+          slippage:    slippagePct,
+          priorityFee: priorityFee,
+          publicKey:   WALLET_KEYPAIR.publicKey.toBase58(),
+        },
+        { responseType: 'arraybuffer', timeout: 12000 }
       );
-      txBuffer = Buffer.from(data);
-    } catch (err2) {
-      throw new Error(`PumpPortal failed: ${err2.message}`);
+
+      if (ppRes.data && ppRes.data.byteLength >= 100) {
+        serialized = new Uint8Array(ppRes.data);
+        log(`PumpPortal quote OK (slippage ${slippagePct}%${attempt > 1 ? `, retry ${attempt}` : ''})`);
+        break;
+      } else {
+        log(`PumpPortal returned small response (${ppRes.data.byteLength} bytes), retrying...`);
+      }
+    } catch (err) {
+      log(`PumpPortal attempt ${attempt} failed: ${err.message}`);
+      if (attempt === 3) throw new Error(`PumpPortal all attempts failed`);
+      await new Promise(r => setTimeout(r, 2000));
     }
   }
 
-  // Check if response is an error message (text) instead of a transaction
-  const preview = txBuffer.slice(0, 50).toString('utf8');
-  if (preview.startsWith('{') || preview.startsWith('Error') || preview.startsWith('error')) {
-    throw new Error(`PumpPortal returned error: ${txBuffer.toString('utf8')}`);
-  }
+  if (!serialized) throw new Error('No transaction from PumpPortal');
 
   // Sign & send
-  const tx = VersionedTransaction.deserialize(txBuffer);
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  const tx = VersionedTransaction.deserialize(serialized);
+  tx.message.recentBlockhash = blockhash;
   tx.sign([WALLET_KEYPAIR]);
 
   const sig = await connection.sendRawTransaction(tx.serialize(), {
@@ -113,28 +102,21 @@ async function swapSolForTroller(solAmount) {
   });
 
   log(`Swap TX sent: ${sig}`);
-
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
   await connection.confirmTransaction(
     { signature: sig, blockhash, lastValidBlockHeight },
     'confirmed'
   );
-
   log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
 
-  // Wait for balance to settle then read actual received amount
+  // Wait for balance to settle
   await new Promise(r => setTimeout(r, 3000));
 
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
-    connection,
-    WALLET_KEYPAIR,
-    trollerMint,
-    WALLET_KEYPAIR.publicKey
+    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey
   );
   const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
   const received = BigInt(value.amount);
   log(`Received: ${(Number(received) / Math.pow(10, value.decimals)).toLocaleString()} $TROLLER`);
-
   return received;
 }
 
@@ -144,10 +126,7 @@ async function burnTroller(amount) {
   log(`Burning $TROLLER...`);
 
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
-    connection,
-    WALLET_KEYPAIR,
-    trollerMint,
-    WALLET_KEYPAIR.publicKey
+    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey
   );
 
   const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
@@ -156,12 +135,8 @@ async function burnTroller(amount) {
   if (amount === 0n) { log('No $TROLLER to burn.'); return; }
 
   const burnIx = createBurnInstruction(
-    tokenAccount.address,
-    trollerMint,
-    WALLET_KEYPAIR.publicKey,
-    amount,
-    [],
-    TOKEN_PROGRAM_ID
+    tokenAccount.address, trollerMint, WALLET_KEYPAIR.publicKey,
+    amount, [], TOKEN_PROGRAM_ID
   );
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
@@ -176,8 +151,7 @@ async function burnTroller(amount) {
 
   const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
   await connection.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    'confirmed'
+    { signature: sig, blockhash, lastValidBlockHeight }, 'confirmed'
   );
 
   const uiAmount = (Number(amount) / Math.pow(10, value.decimals)).toLocaleString();
@@ -243,8 +217,7 @@ async function checkWallet() {
 
 async function main() {
   log('╔══════════════════════════════════════╗');
-  log('║      TROLLER BURN BOT v4.1           ║');
-  log('║      PumpPortal + Raydium            ║');
+  log('║      TROLLER BURN BOT v4.2           ║');
   log('╚══════════════════════════════════════╝');
   log(`Wallet:    ${WALLET_KEYPAIR.publicKey.toString()}`);
   log(`$TROLLER:  ${TROLLER_MINT}`);
