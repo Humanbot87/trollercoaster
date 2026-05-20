@@ -1,15 +1,11 @@
 /**
- * TROLLER BURN BOT
- * ----------------
+ * TROLLER BURN BOT v2.0
+ * ----------------------
  * Monitors wallet for incoming SOL
- * → Buys $TROLLER on Jupiter with 99%
+ * → Buys $TROLLER via Jupiter (with fallback endpoints)
  * → Burns $TROLLER on-chain automatically
  *
- * Single wallet setup — same wallet receives SOL and executes burns.
- *
- * Requirements:
- *   node >= 18
- *   npm install @solana/web3.js @solana/spl-token axios dotenv bs58
+ * Token: DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump (bonded, on Raydium)
  */
 
 require('dotenv').config();
@@ -32,28 +28,32 @@ const bs58 = require('bs58');
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 
 const TROLLER_MINT     = 'DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump';
-const BURN_PERCENT     = 0.99;   // 99% of incoming SOL → buy & burn
-const GAS_RESERVE      = 0.01;   // 1% stays for transaction fees
-const POLL_INTERVAL_MS = 5000;   // check every 5 seconds
-const MIN_SOL_TRIGGER  = 0.005;  // ignore dust below this amount
+const BURN_PERCENT     = 0.99;
+const GAS_RESERVE      = 0.01;
+const POLL_INTERVAL_MS = 5000;
+const MIN_SOL_TRIGGER  = 0.005;
 
-// RPC — set HELIUS_RPC in .env
 const RPC_URL = process.env.HELIUS_RPC || 'https://api.mainnet-beta.solana.com';
 
-// Single wallet: receives SOL AND executes swaps/burns
-// Set WALLET_PRIVATE_KEY in .env (base58 private key)
 const WALLET_KEYPAIR = Keypair.fromSecretKey(
   bs58.decode(process.env.WALLET_PRIVATE_KEY)
 );
+
+// Jupiter endpoints — tries each in order until one works
+const JUPITER_ENDPOINTS = [
+  'https://quote-api.mainnet.jup.ag/v6',
+  'https://public.jupiterapi.com/v6',
+  'https://jupiter-quote-api-node.projectserum.com/v6',
+];
 
 // ─── SETUP ────────────────────────────────────────────────────────────────────
 
 const connection  = new Connection(RPC_URL, 'confirmed');
 const trollerMint = new PublicKey(TROLLER_MINT);
 
-let lastKnownBalance     = 0;
-let processedSignatures  = new Set();
-let isProcessing         = false; // prevent overlapping runs
+let lastKnownBalance    = 0;
+let processedSignatures = new Set();
+let isProcessing        = false;
 
 // ─── LOGGING ──────────────────────────────────────────────────────────────────
 
@@ -63,43 +63,74 @@ function log(msg) {
 
 // ─── JUPITER SWAP: SOL → $TROLLER ─────────────────────────────────────────────
 
-async function swapSolForTroller(solAmount) {
-  const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
-  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER via Jupiter...`);
-
-  // 1. Get quote
-  const quoteUrl =
-    `https://quote-api.jup.ag/v6/quote` +
+async function getJupiterQuote(baseUrl, lamports) {
+  const url =
+    `${baseUrl}/quote` +
     `?inputMint=So11111111111111111111111111111111111111112` +
     `&outputMint=${TROLLER_MINT}` +
     `&amount=${lamports}` +
-    `&slippageBps=300`;
+    `&slippageBps=500`;
 
-  const { data: quote } = await axios.get(quoteUrl);
-  if (!quote?.outAmount) throw new Error('Jupiter quote failed: ' + JSON.stringify(quote));
+  const { data } = await axios.get(url, { timeout: 10000 });
+  return data;
+}
 
-  log(`Quote: ${lamports} lamports → ${Number(quote.outAmount).toLocaleString()} $TROLLER`);
+async function getJupiterSwap(baseUrl, quote) {
+  const { data } = await axios.post(
+    `${baseUrl}/swap`,
+    {
+      quoteResponse: quote,
+      userPublicKey: WALLET_KEYPAIR.publicKey.toString(),
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: 'auto',
+    },
+    { timeout: 15000 }
+  );
+  return data;
+}
 
-  // 2. Get swap transaction
-  const { data: swapData } = await axios.post('https://quote-api.jup.ag/v6/swap', {
-    quoteResponse: quote,
-    userPublicKey: WALLET_KEYPAIR.publicKey.toString(),
-    wrapAndUnwrapSol: true,
-    dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: 'auto',
-  });
+async function swapSolForTroller(solAmount) {
+  const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
+  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER...`);
 
-  if (!swapData?.swapTransaction) throw new Error('No swap transaction from Jupiter');
+  let lastError;
 
-  // 3. Sign & send
-  const tx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-  tx.sign([WALLET_KEYPAIR]);
+  for (const endpoint of JUPITER_ENDPOINTS) {
+    try {
+      log(`Trying endpoint: ${endpoint}`);
 
-  const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-  await connection.confirmTransaction(sig, 'confirmed');
+      const quote = await getJupiterQuote(endpoint, lamports);
+      if (!quote?.outAmount) throw new Error('No quote returned');
 
-  log(`Swap confirmed → https://solscan.io/tx/${sig}`);
-  return BigInt(quote.outAmount);
+      log(`Quote OK: ${lamports} lamports → ${Number(quote.outAmount).toLocaleString()} $TROLLER`);
+
+      const swapData = await getJupiterSwap(endpoint, quote);
+      if (!swapData?.swapTransaction) throw new Error('No swap transaction');
+
+      const tx = VersionedTransaction.deserialize(
+        Buffer.from(swapData.swapTransaction, 'base64')
+      );
+      tx.sign([WALLET_KEYPAIR]);
+
+      const sig = await connection.sendRawTransaction(tx.serialize(), {
+        maxRetries: 3,
+        skipPreflight: true,
+      });
+
+      log(`Swap TX sent: ${sig}`);
+      await connection.confirmTransaction(sig, 'confirmed');
+      log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
+
+      return BigInt(quote.outAmount);
+
+    } catch (err) {
+      log(`❌ Endpoint ${endpoint} failed: ${err.message}`);
+      lastError = err;
+    }
+  }
+
+  throw new Error(`All Jupiter endpoints failed. Last error: ${lastError?.message}`);
 }
 
 // ─── BURN $TROLLER ─────────────────────────────────────────────────────────────
@@ -114,7 +145,6 @@ async function burnTroller(amount) {
     WALLET_KEYPAIR.publicKey
   );
 
-  // Use actual balance if lower than expected
   const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
   const available = BigInt(value.amount);
   if (available < amount) amount = available;
@@ -186,8 +216,8 @@ async function checkWallet() {
     const balance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
 
     if (balance > lastKnownBalance) {
-      const diff = balance - lastKnownBalance;
-      const sigs  = await connection.getSignaturesForAddress(WALLET_KEYPAIR.publicKey, { limit: 3 });
+      const diff   = balance - lastKnownBalance;
+      const sigs   = await connection.getSignaturesForAddress(WALLET_KEYPAIR.publicKey, { limit: 3 });
       const newSig = sigs[0]?.signature;
 
       if (newSig && !processedSignatures.has(newSig)) {
@@ -209,23 +239,21 @@ async function checkWallet() {
 
 async function main() {
   log('╔══════════════════════════════════════╗');
-  log('║      TROLLER BURN BOT v1.0           ║');
+  log('║      TROLLER BURN BOT v2.0           ║');
   log('╚══════════════════════════════════════╝');
   log(`Wallet:    ${WALLET_KEYPAIR.publicKey.toString()}`);
   log(`$TROLLER:  ${TROLLER_MINT}`);
   log(`Burn:      ${BURN_PERCENT * 100}%`);
-  log(`Gas:       ${GAS_RESERVE * 100}%`);
   log(`Poll:      every ${POLL_INTERVAL_MS / 1000}s`);
   log('');
 
-  // Verify wallet matches expected address
-  const actual = WALLET_KEYPAIR.publicKey.toString();
+  // Verify wallet
+  const actual   = WALLET_KEYPAIR.publicKey.toString();
   const expected = '4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB';
   if (actual !== expected) {
     log(`⚠️  WARNING: Wallet mismatch!`);
     log(`   Expected: ${expected}`);
     log(`   Got:      ${actual}`);
-    log(`   Check your WALLET_PRIVATE_KEY in .env`);
     process.exit(1);
   }
 
