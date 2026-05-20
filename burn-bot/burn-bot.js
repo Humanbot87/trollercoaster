@@ -17,6 +17,7 @@ const {
   getOrCreateAssociatedTokenAccount,
   createBurnInstruction,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
 } = require('@solana/spl-token');
 const axios = require('axios');
 const bs58 = require('bs58');
@@ -113,7 +114,8 @@ async function swapSolForTroller(solAmount) {
   await new Promise(r => setTimeout(r, 3000));
 
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
-    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey
+    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey,
+    false, 'confirmed', {}, TOKEN_2022_PROGRAM_ID
   );
   const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
   const received = BigInt(value.amount);
@@ -127,7 +129,8 @@ async function burnTroller(amount) {
   log(`Burning $TROLLER...`);
 
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
-    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey
+    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey,
+    false, 'confirmed', {}, TOKEN_2022_PROGRAM_ID
   );
 
   const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
@@ -137,7 +140,7 @@ async function burnTroller(amount) {
 
   const burnIx = createBurnInstruction(
     tokenAccount.address, trollerMint, WALLET_KEYPAIR.publicKey,
-    amount, [], TOKEN_PROGRAM_ID
+    amount, [], TOKEN_2022_PROGRAM_ID
   );
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
