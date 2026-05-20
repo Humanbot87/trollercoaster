@@ -252,8 +252,29 @@ async function main() {
 
   lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
   log(`Balance: ${(lastKnownBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
-  log('Monitoring for incoming SOL...\n');
 
+  // ── STARTUP SWEEP ─────────────────────────────────────────────────────────
+  // If wallet has more SOL than needed for fees, buy & burn immediately on start
+  const FEE_RESERVE = 0.01 * LAMPORTS_PER_SOL; // keep 0.01 SOL for fees
+  if (lastKnownBalance > FEE_RESERVE + MIN_SOL_TRIGGER * LAMPORTS_PER_SOL) {
+    const sweepLamports = lastKnownBalance - FEE_RESERVE;
+    const sweepSOL = sweepLamports / LAMPORTS_PER_SOL;
+    log(`🚀 Startup sweep: ${sweepSOL.toFixed(4)} SOL available → buying & burning...`);
+    isProcessing = true;
+    try {
+      const trollerAmount = await swapSolForTroller(sweepSOL);
+      await burnTroller(trollerAmount);
+      log(`✅ Startup sweep complete: ${sweepSOL.toFixed(4)} SOL → $TROLLER → 🔥 BURNED\n`);
+    } catch (err) {
+      log(`❌ Startup sweep error: ${err.message}`);
+    }
+    isProcessing = false;
+    lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
+  } else {
+    log(`Balance below threshold — no startup sweep needed.`);
+  }
+
+  log('Monitoring for incoming SOL...\n');
   setInterval(checkWallet, POLL_INTERVAL_MS);
 }
 
