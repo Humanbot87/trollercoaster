@@ -1,9 +1,9 @@
 /**
- * TROLLER BURN BOT v4.0
+ * TROLLER BURN BOT v4.1
  * ----------------------
- * Uses PumpPortal API for swaps (same as house-bot)
+ * Uses PumpPortal API for swaps
  * → Monitors wallet for incoming SOL
- * → Buys $TROLLER via PumpPortal
+ * → Buys $TROLLER via PumpPortal (Raydium pool)
  * → Burns $TROLLER on-chain automatically
  */
 
@@ -56,35 +56,55 @@ function log(msg) {
 async function swapSolForTroller(solAmount) {
   log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER via PumpPortal...`);
 
-  // PumpPortal local trade API — same as house-bot uses
-  const payload = {
-    action: 'buy',
-    mint: TROLLER_MINT,
-    amount: solAmount,         // SOL amount
+  // PumpPortal trade-local — query params format
+  const params = new URLSearchParams({
+    action:          'buy',
+    mint:            TROLLER_MINT,
+    amount:          solAmount.toString(),
     denominatedInSol: 'true',
-    slippage: 25,
-    priorityFee: 0.001,
-    pool: 'raydium',           // bonded token → raydium pool
-  };
+    slippage:        '25',
+    priorityFee:     '0.001',
+    pool:            'raydium',
+    publicKey:       WALLET_KEYPAIR.publicKey.toString(),
+  });
 
-  let txBase64;
+  let txBuffer;
   try {
-    const { data } = await axios.post(
-      'https://pumpportal.fun/api/trade-local',
-      payload,
+    const { data } = await axios.get(
+      `https://pumpportal.fun/api/trade-local?${params.toString()}`,
       {
-        headers: { 'Content-Type': 'application/json' },
         timeout: 15000,
         responseType: 'arraybuffer',
       }
     );
-    txBase64 = Buffer.from(data).toString('base64');
+    txBuffer = Buffer.from(data);
   } catch (err) {
-    throw new Error(`PumpPortal trade-local failed: ${err.message}`);
+    // Try POST with form data as fallback
+    try {
+      log('GET failed, trying POST...');
+      const { data } = await axios.post(
+        'https://pumpportal.fun/api/trade-local',
+        params.toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 15000,
+          responseType: 'arraybuffer',
+        }
+      );
+      txBuffer = Buffer.from(data);
+    } catch (err2) {
+      throw new Error(`PumpPortal failed: ${err2.message}`);
+    }
+  }
+
+  // Check if response is an error message (text) instead of a transaction
+  const preview = txBuffer.slice(0, 50).toString('utf8');
+  if (preview.startsWith('{') || preview.startsWith('Error') || preview.startsWith('error')) {
+    throw new Error(`PumpPortal returned error: ${txBuffer.toString('utf8')}`);
   }
 
   // Sign & send
-  const tx = VersionedTransaction.deserialize(Buffer.from(txBase64, 'base64'));
+  const tx = VersionedTransaction.deserialize(txBuffer);
   tx.sign([WALLET_KEYPAIR]);
 
   const sig = await connection.sendRawTransaction(tx.serialize(), {
@@ -94,7 +114,6 @@ async function swapSolForTroller(solAmount) {
 
   log(`Swap TX sent: ${sig}`);
 
-  // Confirm with timeout
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
   await connection.confirmTransaction(
     { signature: sig, blockhash, lastValidBlockHeight },
@@ -103,8 +122,9 @@ async function swapSolForTroller(solAmount) {
 
   log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
 
-  // Get actual $TROLLER balance received
-  await new Promise(r => setTimeout(r, 3000)); // wait 3s for balance to update
+  // Wait for balance to settle then read actual received amount
+  await new Promise(r => setTimeout(r, 3000));
+
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
     connection,
     WALLET_KEYPAIR,
@@ -113,7 +133,7 @@ async function swapSolForTroller(solAmount) {
   );
   const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
   const received = BigInt(value.amount);
-  log(`Received: ${Number(received).toLocaleString()} $TROLLER (raw)`);
+  log(`Received: ${(Number(received) / Math.pow(10, value.decimals)).toLocaleString()} $TROLLER`);
 
   return received;
 }
@@ -121,7 +141,7 @@ async function swapSolForTroller(solAmount) {
 // ─── BURN $TROLLER ─────────────────────────────────────────────────────────────
 
 async function burnTroller(amount) {
-  log(`Burning ${amount.toLocaleString()} $TROLLER (raw)...`);
+  log(`Burning $TROLLER...`);
 
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
     connection,
@@ -177,7 +197,7 @@ async function processIncomingSOL(diffLamports, sig) {
   log(`→ Using ${solToBurn.toFixed(4)} SOL (99%) to buy & burn $TROLLER`);
 
   if (solToBurn < MIN_SOL_TRIGGER) {
-    log(`Amount too small (${solToBurn.toFixed(6)} SOL), skipping.`);
+    log(`Amount too small, skipping.`);
     isProcessing = false;
     return;
   }
@@ -187,7 +207,7 @@ async function processIncomingSOL(diffLamports, sig) {
     await burnTroller(trollerAmount);
     log(`✅ Complete: ${incomingSOL.toFixed(4)} SOL → $TROLLER → 🔥 BURNED\n`);
   } catch (err) {
-    log(`❌ Error during swap/burn: ${err.message}`);
+    log(`❌ Error: ${err.message}`);
     console.error(err);
   }
 
@@ -223,7 +243,7 @@ async function checkWallet() {
 
 async function main() {
   log('╔══════════════════════════════════════╗');
-  log('║      TROLLER BURN BOT v4.0           ║');
+  log('║      TROLLER BURN BOT v4.1           ║');
   log('║      PumpPortal + Raydium            ║');
   log('╚══════════════════════════════════════╝');
   log(`Wallet:    ${WALLET_KEYPAIR.publicKey.toString()}`);
@@ -237,15 +257,6 @@ async function main() {
   if (actual !== expected) {
     log(`⚠️  Wallet mismatch! Expected ${expected}, got ${actual}`);
     process.exit(1);
-  }
-
-  // Test PumpPortal connectivity
-  log('Testing PumpPortal connectivity...');
-  try {
-    await axios.get('https://pumpportal.fun', { timeout: 5000 });
-    log('✅ PumpPortal reachable');
-  } catch (err) {
-    log(`⚠️  PumpPortal test: ${err.message}`);
   }
 
   lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
