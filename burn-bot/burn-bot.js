@@ -104,11 +104,25 @@ async function swapSolForTroller(solAmount) {
   });
 
   log(`Swap TX sent: ${sig}`);
-  await connection.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    'confirmed'
-  );
-  log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
+  try {
+    await connection.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      'confirmed'
+    );
+    log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
+  } catch (err) {
+    if (err.message?.includes('block height exceeded') || err.message?.includes('expired')) {
+      log(`Confirmation timeout — checking if TX landed...`);
+      await new Promise(r => setTimeout(r, 3000));
+      const status = await connection.getSignatureStatus(sig);
+      const conf = status?.value?.confirmationStatus;
+      if (conf === 'confirmed' || conf === 'finalized') {
+        log(`✅ Swap confirmed (late) → https://solscan.io/tx/${sig}`);
+      } else {
+        log(`⚠️ TX status unknown, proceeding anyway → https://solscan.io/tx/${sig}`);
+      }
+    } else { throw err; }
+  }
 
   // Wait for balance to settle
   await new Promise(r => setTimeout(r, 3000));
