@@ -1,9 +1,9 @@
 /**
- * TROLLER BURN BOT v3.0
+ * TROLLER BURN BOT v4.0
  * ----------------------
- * Uses Helius Jupiter Swap API (no external DNS needed)
+ * Uses PumpPortal API for swaps (same as house-bot)
  * → Monitors wallet for incoming SOL
- * → Buys $TROLLER via Helius/Jupiter
+ * → Buys $TROLLER via PumpPortal
  * → Burns $TROLLER on-chain automatically
  */
 
@@ -28,16 +28,11 @@ const bs58 = require('bs58');
 
 const TROLLER_MINT     = 'DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump';
 const BURN_PERCENT     = 0.99;
-const GAS_RESERVE      = 0.01;
 const POLL_INTERVAL_MS = 5000;
 const MIN_SOL_TRIGGER  = 0.005;
 
 const RPC_URL = process.env.HELIUS_RPC;
 if (!RPC_URL) { console.error('HELIUS_RPC not set in .env'); process.exit(1); }
-
-// Extract API key from Helius RPC URL
-const HELIUS_API_KEY = RPC_URL.match(/api-key=([^&]+)/)?.[1];
-if (!HELIUS_API_KEY) { console.error('Could not extract Helius API key from RPC URL'); process.exit(1); }
 
 const WALLET_KEYPAIR = Keypair.fromSecretKey(
   bs58.decode(process.env.WALLET_PRIVATE_KEY)
@@ -56,74 +51,77 @@ function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-// ─── SWAP: SOL → $TROLLER via Helius Jupiter API ──────────────────────────────
+// ─── SWAP: SOL → $TROLLER via PumpPortal ──────────────────────────────────────
 
 async function swapSolForTroller(solAmount) {
-  const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
-  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER via Helius...`);
+  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER via PumpPortal...`);
 
-  // Helius Jupiter Quote endpoint
-  const quoteUrl =
-    `https://mainnet.helius-rpc.com/v0/quote` +
-    `?api-key=${HELIUS_API_KEY}` +
-    `&inputMint=So11111111111111111111111111111111111111112` +
-    `&outputMint=${TROLLER_MINT}` +
-    `&amount=${lamports}` +
-    `&slippageBps=500`;
+  // PumpPortal local trade API — same as house-bot uses
+  const payload = {
+    action: 'buy',
+    mint: TROLLER_MINT,
+    amount: solAmount,         // SOL amount
+    denominatedInSol: 'true',
+    slippage: 25,
+    priorityFee: 0.001,
+    pool: 'raydium',           // bonded token → raydium pool
+  };
 
-  let quote;
+  let txBase64;
   try {
-    const { data } = await axios.get(quoteUrl, { timeout: 15000 });
-    quote = data;
+    const { data } = await axios.post(
+      'https://pumpportal.fun/api/trade-local',
+      payload,
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+        responseType: 'arraybuffer',
+      }
+    );
+    txBase64 = Buffer.from(data).toString('base64');
   } catch (err) {
-    // Fallback: try Helius swap directly via RPC sendTransaction with Jupiter serialized tx
-    throw new Error(`Helius quote failed: ${err.message}`);
+    throw new Error(`PumpPortal trade-local failed: ${err.message}`);
   }
 
-  if (!quote?.outAmount) {
-    throw new Error('No quote returned: ' + JSON.stringify(quote));
-  }
-
-  log(`Quote: ${lamports} lamports → ${Number(quote.outAmount).toLocaleString()} $TROLLER`);
-
-  // Helius Jupiter Swap endpoint
-  const { data: swapData } = await axios.post(
-    `https://mainnet.helius-rpc.com/v0/swap?api-key=${HELIUS_API_KEY}`,
-    {
-      quoteResponse: quote,
-      userPublicKey: WALLET_KEYPAIR.publicKey.toString(),
-      wrapAndUnwrapSol: true,
-      dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: 'auto',
-    },
-    { timeout: 15000 }
-  );
-
-  if (!swapData?.swapTransaction) {
-    throw new Error('No swap transaction: ' + JSON.stringify(swapData));
-  }
-
-  const tx = VersionedTransaction.deserialize(
-    Buffer.from(swapData.swapTransaction, 'base64')
-  );
+  // Sign & send
+  const tx = VersionedTransaction.deserialize(Buffer.from(txBase64, 'base64'));
   tx.sign([WALLET_KEYPAIR]);
 
   const sig = await connection.sendRawTransaction(tx.serialize(), {
-    maxRetries: 3,
     skipPreflight: true,
+    maxRetries: 3,
   });
 
   log(`Swap TX sent: ${sig}`);
-  await connection.confirmTransaction(sig, 'confirmed');
+
+  // Confirm with timeout
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    'confirmed'
+  );
+
   log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
 
-  return BigInt(quote.outAmount);
+  // Get actual $TROLLER balance received
+  await new Promise(r => setTimeout(r, 3000)); // wait 3s for balance to update
+  const tokenAccount = await getOrCreateAssociatedTokenAccount(
+    connection,
+    WALLET_KEYPAIR,
+    trollerMint,
+    WALLET_KEYPAIR.publicKey
+  );
+  const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
+  const received = BigInt(value.amount);
+  log(`Received: ${Number(received).toLocaleString()} $TROLLER (raw)`);
+
+  return received;
 }
 
 // ─── BURN $TROLLER ─────────────────────────────────────────────────────────────
 
 async function burnTroller(amount) {
-  log(`Burning ${amount.toLocaleString()} $TROLLER...`);
+  log(`Burning ${amount.toLocaleString()} $TROLLER (raw)...`);
 
   const tokenAccount = await getOrCreateAssociatedTokenAccount(
     connection,
@@ -146,7 +144,7 @@ async function burnTroller(amount) {
     TOKEN_PROGRAM_ID
   );
 
-  const { blockhash } = await connection.getLatestBlockhash();
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
   const msg = new TransactionMessage({
     payerKey: WALLET_KEYPAIR.publicKey,
     recentBlockhash: blockhash,
@@ -157,7 +155,10 @@ async function burnTroller(amount) {
   tx.sign([WALLET_KEYPAIR]);
 
   const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-  await connection.confirmTransaction(sig, 'confirmed');
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    'confirmed'
+  );
 
   const uiAmount = (Number(amount) / Math.pow(10, value.decimals)).toLocaleString();
   log(`🔥 BURNED ${uiAmount} $TROLLER → https://solscan.io/tx/${sig}`);
@@ -176,7 +177,7 @@ async function processIncomingSOL(diffLamports, sig) {
   log(`→ Using ${solToBurn.toFixed(4)} SOL (99%) to buy & burn $TROLLER`);
 
   if (solToBurn < MIN_SOL_TRIGGER) {
-    log(`Amount too small (${solToBurn} SOL), skipping.`);
+    log(`Amount too small (${solToBurn.toFixed(6)} SOL), skipping.`);
     isProcessing = false;
     return;
   }
@@ -184,9 +185,9 @@ async function processIncomingSOL(diffLamports, sig) {
   try {
     const trollerAmount = await swapSolForTroller(solToBurn);
     await burnTroller(trollerAmount);
-    log(`✅ Complete: ${incomingSOL.toFixed(4)} SOL → $TROLLER → BURNED\n`);
+    log(`✅ Complete: ${incomingSOL.toFixed(4)} SOL → $TROLLER → 🔥 BURNED\n`);
   } catch (err) {
-    log(`❌ Error: ${err.message}`);
+    log(`❌ Error during swap/burn: ${err.message}`);
     console.error(err);
   }
 
@@ -201,7 +202,9 @@ async function checkWallet() {
     const balance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
     if (balance > lastKnownBalance) {
       const diff   = balance - lastKnownBalance;
-      const sigs   = await connection.getSignaturesForAddress(WALLET_KEYPAIR.publicKey, { limit: 3 });
+      const sigs   = await connection.getSignaturesForAddress(
+        WALLET_KEYPAIR.publicKey, { limit: 3 }
+      );
       const newSig = sigs[0]?.signature;
       if (newSig && !processedSignatures.has(newSig)) {
         processedSignatures.add(newSig);
@@ -220,11 +223,13 @@ async function checkWallet() {
 
 async function main() {
   log('╔══════════════════════════════════════╗');
-  log('║      TROLLER BURN BOT v3.0           ║');
+  log('║      TROLLER BURN BOT v4.0           ║');
+  log('║      PumpPortal + Raydium            ║');
   log('╚══════════════════════════════════════╝');
-  log(`Wallet:      ${WALLET_KEYPAIR.publicKey.toString()}`);
-  log(`$TROLLER:    ${TROLLER_MINT}`);
-  log(`Helius Key:  ${HELIUS_API_KEY.substring(0, 8)}...`);
+  log(`Wallet:    ${WALLET_KEYPAIR.publicKey.toString()}`);
+  log(`$TROLLER:  ${TROLLER_MINT}`);
+  log(`Burn:      ${BURN_PERCENT * 100}%`);
+  log(`Poll:      every ${POLL_INTERVAL_MS / 1000}s`);
   log('');
 
   const actual   = WALLET_KEYPAIR.publicKey.toString();
@@ -234,24 +239,13 @@ async function main() {
     process.exit(1);
   }
 
-  // Test Helius quote endpoint
-  log('Testing Helius Jupiter API...');
+  // Test PumpPortal connectivity
+  log('Testing PumpPortal connectivity...');
   try {
-    const testUrl =
-      `https://mainnet.helius-rpc.com/v0/quote` +
-      `?api-key=${HELIUS_API_KEY}` +
-      `&inputMint=So11111111111111111111111111111111111111112` +
-      `&outputMint=${TROLLER_MINT}` +
-      `&amount=1000000&slippageBps=500`;
-    const { data } = await axios.get(testUrl, { timeout: 10000 });
-    if (data?.outAmount) {
-      log(`✅ Helius Jupiter API working! Test quote: ${Number(data.outAmount).toLocaleString()} $TROLLER per 0.001 SOL`);
-    } else {
-      log(`⚠️  Helius quote returned unexpected data: ${JSON.stringify(data)}`);
-    }
+    await axios.get('https://pumpportal.fun', { timeout: 5000 });
+    log('✅ PumpPortal reachable');
   } catch (err) {
-    log(`⚠️  Helius Jupiter test failed: ${err.message}`);
-    log('    Bot will still run but swaps may fail.');
+    log(`⚠️  PumpPortal test: ${err.message}`);
   }
 
   lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
