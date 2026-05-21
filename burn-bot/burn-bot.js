@@ -74,16 +74,16 @@ async function swapSolForTroller(solAmount) {
 
   const sig = await connection.sendRawTransaction(tx.serialize(), {
     skipPreflight: true,
-    maxRetries: 3,
+    maxRetries: 5,
   });
   log("Swap TX sent: " + sig);
 
-  // Poll for confirmation up to 60s
-  const deadline = Date.now() + 60000;
+  // Poll confirmation up to 120s
+  const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 2000));
     try {
-      const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: false });
+      const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
       if (status && status.value) {
         if (status.value.err) {
           log("Swap TX FAILED on-chain: " + JSON.stringify(status.value.err));
@@ -98,21 +98,8 @@ async function swapSolForTroller(solAmount) {
     } catch (e) { /* retry */ }
   }
 
-  // Final check
-  try {
-    const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-    if (status && status.value && !status.value.err) {
-      const conf = status.value.confirmationStatus;
-      if (conf === "confirmed" || conf === "finalized") {
-        log("Swap confirmed (late) -> https://solscan.io/tx/" + sig);
-        return true;
-      }
-    }
-    log("Swap TX not confirmed after 60s");
-    return false;
-  } catch (e) {
-    return false;
-  }
+  log("Swap TX timeout after 120s -> https://solscan.io/tx/" + sig);
+  return false;
 }
 
 // ─── BURN $TROLLER ────────────────────────────────────────────────────────────
@@ -149,7 +136,9 @@ async function burnTroller() {
     tx.sign([WALLET]);
 
     const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+    await connection.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight }, "confirmed"
+    );
     log("BURNED " + uiAmount + " $TROLLER -> https://solscan.io/tx/" + sig);
     return true;
   } catch (e) {
@@ -168,27 +157,24 @@ async function trySweep() {
     const swappableSOL = balanceSOL - FEE_RESERVE;
 
     if (swappableSOL < MIN_SWAP_SOL) {
-      log("Balance: " + balanceSOL.toFixed(6) + " SOL — below threshold, waiting for SOL...");
+      log("Balance: " + balanceSOL.toFixed(6) + " SOL — waiting for more SOL...");
       return;
     }
 
     isProcessing = true;
     log("=== SWEEP START ===");
-    log("Balance: " + balanceSOL.toFixed(6) + " SOL");
-    log("Swapping: " + swappableSOL.toFixed(6) + " SOL (keeping " + FEE_RESERVE + " SOL for fees)");
+    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL");
 
     const swapOk = await swapSolForTroller(swappableSOL);
 
     if (swapOk) {
-      await new Promise(r => setTimeout(r, 5000)); // wait for token balance
+      await new Promise(r => setTimeout(r, 5000));
       await burnTroller();
       log("=== SWEEP COMPLETE ===");
-      // Cooldown after successful sweep
-      await new Promise(r => setTimeout(r, 30000));
+      await new Promise(r => setTimeout(r, 30000)); // 30s cooldown
     } else {
-      log("=== SWAP FAILED — will retry in next cycle ===");
-      // Short cooldown before retry
-      await new Promise(r => setTimeout(r, 10000));
+      log("=== SWAP FAILED — retrying next cycle ===");
+      await new Promise(r => setTimeout(r, 10000)); // 10s before retry
     }
 
   } catch (e) {
@@ -219,10 +205,7 @@ async function main() {
   const startBalance = await connection.getBalance(WALLET.publicKey);
   log("Startup balance: " + (startBalance / LAMPORTS_PER_SOL).toFixed(6) + " SOL");
 
-  // Run immediately on startup
   await trySweep();
-
-  // Then poll every 10s
   setInterval(trySweep, POLL_MS);
 }
 
