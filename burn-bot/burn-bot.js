@@ -12,7 +12,7 @@ const bs58 = require("bs58");
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
-const POLL_MS      = 10000;   // check every 10s
+const POLL_MS      = 10000;
 const FEE_RESERVE  = 0.05;    // SOL to keep for fees
 const MIN_SWAP_SOL = 0.02;    // minimum SOL to trigger swap
 
@@ -30,8 +30,10 @@ function log(msg) {
 }
 
 // ─── SWAP SOL → $TROLLER ──────────────────────────────────────────────────────
-async function swapSolForTroller(solAmount) {
-  log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
+// amount in LAMPORTS (integer) — denominatedInSol: false
+async function swapSolForTroller(lamports) {
+  const solAmount = lamports / LAMPORTS_PER_SOL;
+  log("Swapping " + solAmount.toFixed(6) + " SOL (" + lamports + " lamports) -> $TROLLER...");
   let serialized = null;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -42,8 +44,8 @@ async function swapSolForTroller(solAmount) {
         {
           action:           "buy",
           mint:             TROLLER_MINT,
-          amount:           solAmount,
-          denominatedInSol: "true",
+          amount:           lamports,        // INTEGER lamports
+          denominatedInSol: "false",         // false = amount is in lamports
           slippage:         slippage,
           priorityFee:      0,
           pool:             "pump-amm",
@@ -154,7 +156,9 @@ async function trySweep() {
   try {
     const balance = await connection.getBalance(WALLET.publicKey);
     const balanceSOL = balance / LAMPORTS_PER_SOL;
-    const swappableSOL = balanceSOL - FEE_RESERVE;
+    const feeLamports = Math.floor(FEE_RESERVE * LAMPORTS_PER_SOL);
+    const swapLamports = balance - feeLamports;
+    const swappableSOL = swapLamports / LAMPORTS_PER_SOL;
 
     if (swappableSOL < MIN_SWAP_SOL) {
       log("Balance: " + balanceSOL.toFixed(6) + " SOL — waiting for more SOL...");
@@ -163,9 +167,9 @@ async function trySweep() {
 
     isProcessing = true;
     log("=== SWEEP START ===");
-    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL");
+    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL (" + swapLamports + " lamports)");
 
-    const swapOk = await swapSolForTroller(swappableSOL);
+    const swapOk = await swapSolForTroller(swapLamports);
 
     if (swapOk) {
       await new Promise(r => setTimeout(r, 5000));
@@ -174,7 +178,7 @@ async function trySweep() {
       await new Promise(r => setTimeout(r, 30000)); // 30s cooldown
     } else {
       log("=== SWAP FAILED — retrying next cycle ===");
-      await new Promise(r => setTimeout(r, 10000)); // 10s before retry
+      await new Promise(r => setTimeout(r, 10000));
     }
 
   } catch (e) {
@@ -188,7 +192,7 @@ async function trySweep() {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
   log("╔══════════════════════════════════════╗");
-  log("║      TROLLER BURN BOT v8.0           ║");
+  log("║      TROLLER BURN BOT v9.0           ║");
   log("╚══════════════════════════════════════╝");
   log("Wallet:   " + WALLET.publicKey.toString());
   log("Token:    " + TROLLER_MINT);
