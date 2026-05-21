@@ -13,8 +13,8 @@ const bs58 = require("bs58");
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
 const POLL_MS      = 10000;
-const FEE_RESERVE  = 0.1;    // SOL to keep for fees (PumpPortal needs extra buffer)
-const MIN_SWAP_SOL = 0.02;   // minimum SOL to trigger swap
+const FEE_RESERVE  = 0.05;   // SOL to keep for fees
+const MIN_SWAP_SOL = 0.02;
 
 const RPC_URL = process.env.HELIUS_RPC;
 if (!RPC_URL) { console.error("HELIUS_RPC not set"); process.exit(1); }
@@ -44,10 +44,11 @@ async function getTrollerPriceInSol() {
 async function swapSolForTroller(solAmount) {
   log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
 
-  // Get live price and convert SOL to token amount
+  // Get live price and convert SOL to raw token units (6 decimals)
   const pricePerToken = await getTrollerPriceInSol();
   const tokenAmount = solAmount / pricePerToken;
-  log("Requesting: " + Math.round(tokenAmount).toLocaleString() + " $TROLLER for " + solAmount.toFixed(6) + " SOL");
+  const rawAmount = Math.round(tokenAmount * 1_000_000); // 6 decimals
+  log("Requesting: " + tokenAmount.toLocaleString() + " $TROLLER = " + rawAmount + " raw units for " + solAmount.toFixed(6) + " SOL");
 
   let serialized = null;
 
@@ -59,7 +60,7 @@ async function swapSolForTroller(solAmount) {
         {
           action:      "buy",
           mint:        TROLLER_MINT,
-          amount:      tokenAmount,
+          amount:      rawAmount,
           slippage:    slippage,
           priorityFee: 0,
           pool:        "pump-amm",
@@ -93,7 +94,6 @@ async function swapSolForTroller(solAmount) {
   });
   log("Swap TX sent: " + sig);
 
-  // Poll confirmation up to 120s
   const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 2000));
@@ -101,12 +101,7 @@ async function swapSolForTroller(solAmount) {
       const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
       if (status && status.value) {
         if (status.value.err) {
-          // Check if it's insufficient lamports — increase reserve and retry
-          const errStr = JSON.stringify(status.value.err);
-          log("Swap FAILED on-chain: " + errStr);
-          if (errStr.includes("Custom") && errStr.includes("1")) {
-            log("Hint: insufficient lamports — try increasing FEE_RESERVE");
-          }
+          log("Swap FAILED on-chain: " + JSON.stringify(status.value.err));
           return false;
         }
         const conf = status.value.confirmationStatus;
@@ -198,7 +193,7 @@ async function trySweep() {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
   log("╔══════════════════════════════════════╗");
-  log("║      TROLLER BURN BOT v10.0          ║");
+  log("║      TROLLER BURN BOT v11.0          ║");
   log("╚══════════════════════════════════════╝");
   log("Wallet:   " + WALLET.publicKey.toString());
   log("Token:    " + TROLLER_MINT);
