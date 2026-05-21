@@ -1,209 +1,232 @@
-cat > /root/trollercoaster/burn-bot/burn-bot.js << 'BOTEOF'
-/**
- * TROLLER BURN BOT v5.0
- */
-
-require('dotenv').config();
+require("dotenv").config();
 const {
   Connection, PublicKey, Keypair, VersionedTransaction,
   TransactionMessage, LAMPORTS_PER_SOL,
-} = require('@solana/web3.js');
+} = require("@solana/web3.js");
 const {
   getOrCreateAssociatedTokenAccount, createBurnInstruction,
   TOKEN_2022_PROGRAM_ID,
-} = require('@solana/spl-token');
-const axios = require('axios');
-const bs58 = require('bs58');
+} = require("@solana/spl-token");
+const axios = require("axios");
+const bs58 = require("bs58");
 
-const TROLLER_MINT     = 'DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump';
-const BURN_PERCENT     = 0.99;
-const POLL_INTERVAL_MS = 5000;
-const MIN_SOL_TRIGGER  = 0.005;
-const FEE_RESERVE      = 0.01;
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
+const POLL_MS      = 10000;   // check every 10s
+const FEE_RESERVE  = 0.05;    // SOL to keep for fees
+const MIN_SWAP_SOL = 0.02;    // minimum SOL to trigger swap
 
 const RPC_URL = process.env.HELIUS_RPC;
-if (!RPC_URL) { console.error('HELIUS_RPC not set'); process.exit(1); }
+if (!RPC_URL) { console.error("HELIUS_RPC not set"); process.exit(1); }
 
-const WALLET_KEYPAIR = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
-const connection     = new Connection(RPC_URL, 'confirmed');
-const trollerMint    = new PublicKey(TROLLER_MINT);
+const WALLET = Keypair.fromSecretKey(bs58.decode(process.env.WALLET_PRIVATE_KEY));
+const connection = new Connection(RPC_URL, "confirmed");
+const trollerMint = new PublicKey(TROLLER_MINT);
 
-let lastKnownBalance    = 0;
-let processedSignatures = new Set();
-let isProcessing        = false;
+let isProcessing = false;
 
-function log(msg) { console.log(`[${new Date().toISOString()}] ${msg}`); }
+function log(msg) {
+  console.log("[" + new Date().toISOString() + "] " + msg);
+}
 
+// ─── SWAP SOL → $TROLLER ──────────────────────────────────────────────────────
 async function swapSolForTroller(solAmount) {
-  log(`Swapping ${solAmount.toFixed(4)} SOL → $TROLLER...`);
+  log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
   let serialized = null;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const slippagePct = attempt === 1 ? 25 : attempt === 2 ? 40 : 60;
-    const priorityFee = 0.003 * attempt;
+    const slippage = attempt === 1 ? 25 : attempt === 2 ? 40 : 60;
     try {
-      const ppRes = await axios.post(
-        'https://pumpportal.fun/api/trade-local',
+      const res = await axios.post(
+        "https://pumpportal.fun/api/trade-local",
         {
-          action:           'buy',
+          action:           "buy",
           mint:             TROLLER_MINT,
           amount:           solAmount,
-          denominatedInSol: 'true',
-          slippage:         slippagePct,
-          priorityFee:      priorityFee,
-          pool:             'pump-amm',
-          publicKey:        WALLET_KEYPAIR.publicKey.toBase58(),
+          denominatedInSol: "true",
+          slippage:         slippage,
+          priorityFee:      0,
+          pool:             "pump-amm",
+          publicKey:        WALLET.publicKey.toBase58(),
         },
-        { responseType: 'arraybuffer', timeout: 15000 }
+        { responseType: "arraybuffer", timeout: 15000 }
       );
-      if (ppRes.data && ppRes.data.byteLength >= 100) {
-        serialized = new Uint8Array(ppRes.data);
-        log(`PumpPortal OK (slippage ${slippagePct}%${attempt > 1 ? ` retry ${attempt}` : ''})`);
+      if (res.data && res.data.byteLength >= 100) {
+        serialized = new Uint8Array(res.data);
+        log("PumpPortal quote OK (slippage " + slippage + "%, attempt " + attempt + ")");
         break;
+      } else {
+        log("PumpPortal small response: " + (res.data ? res.data.byteLength : 0) + " bytes");
       }
-    } catch (err) {
-      log(`PumpPortal attempt ${attempt} failed: ${err.message}`);
-      if (attempt === 3) throw new Error('PumpPortal all attempts failed');
-      await new Promise(r => setTimeout(r, 2000));
+    } catch (e) {
+      log("PumpPortal attempt " + attempt + " failed: " + e.message);
+      if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
     }
   }
 
-  if (!serialized) throw new Error('No TX from PumpPortal');
+  if (!serialized) throw new Error("PumpPortal: no valid TX after 3 attempts");
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  // Sign & send
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
   const tx = VersionedTransaction.deserialize(serialized);
   tx.message.recentBlockhash = blockhash;
-  tx.sign([WALLET_KEYPAIR]);
+  tx.sign([WALLET]);
 
-  const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 3 });
-  log(`Swap TX sent: ${sig}`);
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+  log("Swap TX sent: " + sig);
 
-  try {
-    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
-    log(`✅ Swap confirmed → https://solscan.io/tx/${sig}`);
-  } catch (err) {
-    if (err.message?.includes('block height exceeded') || err.message?.includes('expired')) {
-      await new Promise(r => setTimeout(r, 3000));
-      const status = await connection.getSignatureStatus(sig);
-      const conf = status?.value?.confirmationStatus;
-      log(conf === 'confirmed' || conf === 'finalized'
-        ? `✅ Swap confirmed (late) → https://solscan.io/tx/${sig}`
-        : `⚠️ TX status unknown → https://solscan.io/tx/${sig}`);
-    } else throw err;
+  // Poll for confirmation up to 60s
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: false });
+      if (status && status.value) {
+        if (status.value.err) {
+          log("Swap TX FAILED on-chain: " + JSON.stringify(status.value.err));
+          return false;
+        }
+        const conf = status.value.confirmationStatus;
+        if (conf === "confirmed" || conf === "finalized") {
+          log("Swap confirmed -> https://solscan.io/tx/" + sig);
+          return true;
+        }
+      }
+    } catch (e) { /* retry */ }
   }
 
-  await new Promise(r => setTimeout(r, 3000));
-
-  const tokenAccount = await getOrCreateAssociatedTokenAccount(
-    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey,
-    false, 'confirmed', {}, TOKEN_2022_PROGRAM_ID
-  );
-  const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
-  const received = BigInt(value.amount);
-  log(`Received: ${(Number(received) / Math.pow(10, value.decimals)).toLocaleString()} $TROLLER`);
-  return received;
-}
-
-async function burnTroller(amount) {
-  log(`Burning $TROLLER...`);
-  const tokenAccount = await getOrCreateAssociatedTokenAccount(
-    connection, WALLET_KEYPAIR, trollerMint, WALLET_KEYPAIR.publicKey,
-    false, 'confirmed', {}, TOKEN_2022_PROGRAM_ID
-  );
-  const { value } = await connection.getTokenAccountBalance(tokenAccount.address);
-  const available = BigInt(value.amount);
-  if (available < amount) amount = available;
-  if (amount === 0n) { log('No $TROLLER to burn.'); return; }
-
-  const burnIx = createBurnInstruction(
-    tokenAccount.address, trollerMint, WALLET_KEYPAIR.publicKey,
-    amount, [], TOKEN_2022_PROGRAM_ID
-  );
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-  const msg = new TransactionMessage({
-    payerKey: WALLET_KEYPAIR.publicKey,
-    recentBlockhash: blockhash,
-    instructions: [burnIx],
-  }).compileToV0Message();
-  const tx = new VersionedTransaction(msg);
-  tx.sign([WALLET_KEYPAIR]);
-  const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
-  await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
-  const uiAmount = (Number(amount) / Math.pow(10, value.decimals)).toLocaleString();
-  log(`🔥 BURNED ${uiAmount} $TROLLER → https://solscan.io/tx/${sig}`);
-}
-
-async function sweepAndBurn(solBalance) {
-  const sweepSOL = (solBalance - FEE_RESERVE * LAMPORTS_PER_SOL) / LAMPORTS_PER_SOL;
-  if (sweepSOL < MIN_SOL_TRIGGER) return;
-  isProcessing = true;
-  log(`💰 Sweep: ${sweepSOL.toFixed(4)} SOL → buying & burning $TROLLER...`);
+  // Final check
   try {
-    const trollerAmount = await swapSolForTroller(sweepSOL);
-    await burnTroller(trollerAmount);
-    log(`✅ Complete: ${sweepSOL.toFixed(4)} SOL → $TROLLER → 🔥 BURNED\n`);
-  } catch (err) {
-    log(`❌ Sweep error: ${err.message}`);
-  }
-  isProcessing = false;
-  lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
-}
-
-async function checkWallet() {
-  if (isProcessing) return;
-  try {
-    const balance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
-    if (balance > lastKnownBalance) {
-      const diff   = balance - lastKnownBalance;
-      const sigs   = await connection.getSignaturesForAddress(WALLET_KEYPAIR.publicKey, { limit: 3 });
-      const newSig = sigs[0]?.signature;
-      if (newSig && !processedSignatures.has(newSig)) {
-        processedSignatures.add(newSig);
-        if (processedSignatures.size > 200)
-          processedSignatures.delete(processedSignatures.values().next().value);
-        // Sweep full balance minus fee reserve (not just the diff)
-        await sweepAndBurn(balance);
-        return;
+    const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+    if (status && status.value && !status.value.err) {
+      const conf = status.value.confirmationStatus;
+      if (conf === "confirmed" || conf === "finalized") {
+        log("Swap confirmed (late) -> https://solscan.io/tx/" + sig);
+        return true;
       }
     }
-    lastKnownBalance = balance;
-  } catch (err) {
-    log(`Poll error: ${err.message}`);
+    log("Swap TX not confirmed after 60s");
+    return false;
+  } catch (e) {
+    return false;
   }
 }
 
-async function main() {
-  log('╔══════════════════════════════════════╗');
-  log('║      TROLLER BURN BOT v5.0           ║');
-  log('╚══════════════════════════════════════╝');
-  log(`Wallet:   ${WALLET_KEYPAIR.publicKey.toString()}`);
-  log(`$TROLLER: ${TROLLER_MINT}`);
-  log(`Reserve:  ${FEE_RESERVE} SOL for fees`);
-  log('');
+// ─── BURN $TROLLER ────────────────────────────────────────────────────────────
+async function burnTroller() {
+  try {
+    const ata = await getOrCreateAssociatedTokenAccount(
+      connection, WALLET, trollerMint, WALLET.publicKey,
+      false, "confirmed", {}, TOKEN_2022_PROGRAM_ID
+    );
+    const { value } = await connection.getTokenAccountBalance(ata.address);
+    const amount = BigInt(value.amount);
 
-  const actual = WALLET_KEYPAIR.publicKey.toString();
-  if (actual !== '4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB') {
-    log(`⚠️ Wallet mismatch! Got: ${actual}`);
+    if (amount === 0n) {
+      log("No $TROLLER to burn.");
+      return false;
+    }
+
+    const uiAmount = (Number(amount) / Math.pow(10, value.decimals)).toLocaleString();
+    log("Burning " + uiAmount + " $TROLLER...");
+
+    const burnIx = createBurnInstruction(
+      ata.address, trollerMint, WALLET.publicKey,
+      amount, [], TOKEN_2022_PROGRAM_ID
+    );
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    const msg = new TransactionMessage({
+      payerKey: WALLET.publicKey,
+      recentBlockhash: blockhash,
+      instructions: [burnIx],
+    }).compileToV0Message();
+
+    const tx = new VersionedTransaction(msg);
+    tx.sign([WALLET]);
+
+    const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
+    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+    log("BURNED " + uiAmount + " $TROLLER -> https://solscan.io/tx/" + sig);
+    return true;
+  } catch (e) {
+    log("Burn error: " + e.message);
+    return false;
+  }
+}
+
+// ─── SWEEP ────────────────────────────────────────────────────────────────────
+async function trySweep() {
+  if (isProcessing) return;
+
+  try {
+    const balance = await connection.getBalance(WALLET.publicKey);
+    const balanceSOL = balance / LAMPORTS_PER_SOL;
+    const swappableSOL = balanceSOL - FEE_RESERVE;
+
+    if (swappableSOL < MIN_SWAP_SOL) {
+      log("Balance: " + balanceSOL.toFixed(6) + " SOL — below threshold, waiting for SOL...");
+      return;
+    }
+
+    isProcessing = true;
+    log("=== SWEEP START ===");
+    log("Balance: " + balanceSOL.toFixed(6) + " SOL");
+    log("Swapping: " + swappableSOL.toFixed(6) + " SOL (keeping " + FEE_RESERVE + " SOL for fees)");
+
+    const swapOk = await swapSolForTroller(swappableSOL);
+
+    if (swapOk) {
+      await new Promise(r => setTimeout(r, 5000)); // wait for token balance
+      await burnTroller();
+      log("=== SWEEP COMPLETE ===");
+      // Cooldown after successful sweep
+      await new Promise(r => setTimeout(r, 30000));
+    } else {
+      log("=== SWAP FAILED — will retry in next cycle ===");
+      // Short cooldown before retry
+      await new Promise(r => setTimeout(r, 10000));
+    }
+
+  } catch (e) {
+    log("Sweep error: " + e.message);
+    console.error(e);
+  } finally {
+    isProcessing = false;
+  }
+}
+
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
+async function main() {
+  log("╔══════════════════════════════════════╗");
+  log("║      TROLLER BURN BOT v8.0           ║");
+  log("╚══════════════════════════════════════╝");
+  log("Wallet:   " + WALLET.publicKey.toString());
+  log("Token:    " + TROLLER_MINT);
+  log("Reserve:  " + FEE_RESERVE + " SOL");
+  log("Min swap: " + MIN_SWAP_SOL + " SOL");
+  log("Poll:     every " + (POLL_MS / 1000) + "s");
+  log("");
+
+  if (WALLET.publicKey.toString() !== "4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB") {
+    log("Wallet mismatch!");
     process.exit(1);
   }
 
-  lastKnownBalance = await connection.getBalance(WALLET_KEYPAIR.publicKey);
-  log(`Balance: ${(lastKnownBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+  const startBalance = await connection.getBalance(WALLET.publicKey);
+  log("Startup balance: " + (startBalance / LAMPORTS_PER_SOL).toFixed(6) + " SOL");
 
-  // Startup sweep — buy & burn everything above fee reserve
-  if (lastKnownBalance > (FEE_RESERVE + MIN_SOL_TRIGGER) * LAMPORTS_PER_SOL) {
-    log(`🚀 Startup sweep starting...`);
-    await sweepAndBurn(lastKnownBalance);
-  } else {
-    log(`No startup sweep needed.`);
-  }
+  // Run immediately on startup
+  await trySweep();
 
-  log('Monitoring for incoming SOL...\n');
-  setInterval(checkWallet, POLL_INTERVAL_MS);
+  // Then poll every 10s
+  setInterval(trySweep, POLL_MS);
 }
 
-main().catch(err => { console.error('Fatal:', err); process.exit(1); });
-BOTEOF
-
-pm2 restart burn-bot
-pm2 logs burn-bot --lines 20
+main().catch(e => {
+  console.error("Fatal:", e);
+  process.exit(1);
+});
