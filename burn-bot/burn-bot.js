@@ -13,8 +13,8 @@ const bs58 = require("bs58");
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
 const POLL_MS      = 10000;
-const FEE_RESERVE  = 0.05;    // SOL to keep for fees
-const MIN_SWAP_SOL = 0.02;    // minimum SOL to trigger swap
+const FEE_RESERVE  = 0.05;   // SOL to keep for fees
+const MIN_SWAP_SOL = 0.02;   // minimum SOL to trigger swap
 
 const RPC_URL = process.env.HELIUS_RPC;
 if (!RPC_URL) { console.error("HELIUS_RPC not set"); process.exit(1); }
@@ -30,10 +30,9 @@ function log(msg) {
 }
 
 // ─── SWAP SOL → $TROLLER ──────────────────────────────────────────────────────
-// amount in LAMPORTS (integer) — denominatedInSol: false
-async function swapSolForTroller(lamports) {
-  const solAmount = lamports / LAMPORTS_PER_SOL;
-  log("Swapping " + solAmount.toFixed(6) + " SOL (" + lamports + " lamports) -> $TROLLER...");
+// amount as SOL float, no denominatedInSol — this is what worked
+async function swapSolForTroller(solAmount) {
+  log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
   let serialized = null;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -42,20 +41,19 @@ async function swapSolForTroller(lamports) {
       const res = await axios.post(
         "https://pumpportal.fun/api/trade-local",
         {
-          action:           "buy",
-          mint:             TROLLER_MINT,
-          amount:           lamports,        // INTEGER lamports
-          denominatedInSol: "false",         // false = amount is in lamports
-          slippage:         slippage,
-          priorityFee:      0,
-          pool:             "pump-amm",
-          publicKey:        WALLET.publicKey.toBase58(),
+          action:      "buy",
+          mint:        TROLLER_MINT,
+          amount:      solAmount,
+          slippage:    slippage,
+          priorityFee: 0,
+          pool:        "pump-amm",
+          publicKey:   WALLET.publicKey.toBase58(),
         },
         { responseType: "arraybuffer", timeout: 15000 }
       );
       if (res.data && res.data.byteLength >= 100) {
         serialized = new Uint8Array(res.data);
-        log("PumpPortal quote OK (slippage " + slippage + "%, attempt " + attempt + ")");
+        log("PumpPortal quote OK slippage=" + slippage + "% attempt=" + attempt);
         break;
       } else {
         log("PumpPortal small response: " + (res.data ? res.data.byteLength : 0) + " bytes");
@@ -68,7 +66,6 @@ async function swapSolForTroller(lamports) {
 
   if (!serialized) throw new Error("PumpPortal: no valid TX after 3 attempts");
 
-  // Sign & send
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
   const tx = VersionedTransaction.deserialize(serialized);
   tx.message.recentBlockhash = blockhash;
@@ -88,7 +85,7 @@ async function swapSolForTroller(lamports) {
       const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
       if (status && status.value) {
         if (status.value.err) {
-          log("Swap TX FAILED on-chain: " + JSON.stringify(status.value.err));
+          log("Swap FAILED on-chain: " + JSON.stringify(status.value.err));
           return false;
         }
         const conf = status.value.confirmationStatus;
@@ -97,10 +94,9 @@ async function swapSolForTroller(lamports) {
           return true;
         }
       }
-    } catch (e) { /* retry */ }
+    } catch (e) {}
   }
-
-  log("Swap TX timeout after 120s -> https://solscan.io/tx/" + sig);
+  log("Swap timeout -> https://solscan.io/tx/" + sig);
   return false;
 }
 
@@ -113,11 +109,7 @@ async function burnTroller() {
     );
     const { value } = await connection.getTokenAccountBalance(ata.address);
     const amount = BigInt(value.amount);
-
-    if (amount === 0n) {
-      log("No $TROLLER to burn.");
-      return false;
-    }
+    if (amount === 0n) { log("No $TROLLER to burn."); return false; }
 
     const uiAmount = (Number(amount) / Math.pow(10, value.decimals)).toLocaleString();
     log("Burning " + uiAmount + " $TROLLER...");
@@ -126,17 +118,14 @@ async function burnTroller() {
       ata.address, trollerMint, WALLET.publicKey,
       amount, [], TOKEN_2022_PROGRAM_ID
     );
-
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     const msg = new TransactionMessage({
       payerKey: WALLET.publicKey,
       recentBlockhash: blockhash,
       instructions: [burnIx],
     }).compileToV0Message();
-
     const tx = new VersionedTransaction(msg);
     tx.sign([WALLET]);
-
     const sig = await connection.sendRawTransaction(tx.serialize(), { maxRetries: 3 });
     await connection.confirmTransaction(
       { signature: sig, blockhash, lastValidBlockHeight }, "confirmed"
@@ -152,35 +141,31 @@ async function burnTroller() {
 // ─── SWEEP ────────────────────────────────────────────────────────────────────
 async function trySweep() {
   if (isProcessing) return;
-
   try {
     const balance = await connection.getBalance(WALLET.publicKey);
     const balanceSOL = balance / LAMPORTS_PER_SOL;
-    const feeLamports = Math.floor(FEE_RESERVE * LAMPORTS_PER_SOL);
-    const swapLamports = balance - feeLamports;
-    const swappableSOL = swapLamports / LAMPORTS_PER_SOL;
+    const swappableSOL = balanceSOL - FEE_RESERVE;
 
     if (swappableSOL < MIN_SWAP_SOL) {
-      log("Balance: " + balanceSOL.toFixed(6) + " SOL — waiting for more SOL...");
+      log("Balance: " + balanceSOL.toFixed(6) + " SOL — waiting for SOL...");
       return;
     }
 
     isProcessing = true;
     log("=== SWEEP START ===");
-    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL (" + swapLamports + " lamports)");
+    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL");
 
-    const swapOk = await swapSolForTroller(swapLamports);
+    const swapOk = await swapSolForTroller(swappableSOL);
 
     if (swapOk) {
       await new Promise(r => setTimeout(r, 5000));
       await burnTroller();
       log("=== SWEEP COMPLETE ===");
-      await new Promise(r => setTimeout(r, 30000)); // 30s cooldown
+      await new Promise(r => setTimeout(r, 30000));
     } else {
-      log("=== SWAP FAILED — retrying next cycle ===");
+      log("=== SWAP FAILED — retry next cycle ===");
       await new Promise(r => setTimeout(r, 10000));
     }
-
   } catch (e) {
     log("Sweep error: " + e.message);
     console.error(e);
@@ -202,8 +187,7 @@ async function main() {
   log("");
 
   if (WALLET.publicKey.toString() !== "4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB") {
-    log("Wallet mismatch!");
-    process.exit(1);
+    log("Wallet mismatch!"); process.exit(1);
   }
 
   const startBalance = await connection.getBalance(WALLET.publicKey);
@@ -213,7 +197,4 @@ async function main() {
   setInterval(trySweep, POLL_MS);
 }
 
-main().catch(e => {
-  console.error("Fatal:", e);
-  process.exit(1);
-});
+main().catch(e => { console.error("Fatal:", e); process.exit(1); });
