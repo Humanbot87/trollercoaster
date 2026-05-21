@@ -15,6 +15,7 @@ const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
 const POLL_MS      = 10000;
 const FEE_RESERVE  = 0.05;   // SOL to keep for fees
 const MIN_SWAP_SOL = 0.02;
+const AMOUNT_FACTOR = 0.95;  // buy 95% of calculated amount (price buffer)
 
 const RPC_URL = process.env.HELIUS_RPC;
 if (!RPC_URL) { console.error("HELIUS_RPC not set"); process.exit(1); }
@@ -44,11 +45,10 @@ async function getTrollerPriceInSol() {
 async function swapSolForTroller(solAmount) {
   log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
 
-  // Get live price and convert SOL to raw token units (6 decimals)
+  // Get live price, calculate token amount with 5% buffer
   const pricePerToken = await getTrollerPriceInSol();
-  const tokenAmount = solAmount / pricePerToken;
-  const rawAmount = Math.round(tokenAmount * 1_000_000); // 6 decimals
-  log("Requesting: " + tokenAmount.toLocaleString() + " $TROLLER = " + rawAmount + " raw units for " + solAmount.toFixed(6) + " SOL");
+  const tokenAmount = Math.round((solAmount / pricePerToken) * AMOUNT_FACTOR);
+  log("Requesting: " + tokenAmount.toLocaleString() + " $TROLLER for " + solAmount.toFixed(6) + " SOL (95% of max)");
 
   let serialized = null;
 
@@ -60,7 +60,7 @@ async function swapSolForTroller(solAmount) {
         {
           action:      "buy",
           mint:        TROLLER_MINT,
-          amount:      rawAmount,
+          amount:      tokenAmount,
           slippage:    slippage,
           priorityFee: 0,
           pool:        "pump-amm",
@@ -199,6 +199,7 @@ async function main() {
   log("Token:    " + TROLLER_MINT);
   log("Reserve:  " + FEE_RESERVE + " SOL");
   log("Min swap: " + MIN_SWAP_SOL + " SOL");
+  log("Factor:   " + (AMOUNT_FACTOR * 100) + "% of calculated amount");
   log("Poll:     every " + (POLL_MS / 1000) + "s");
   log("");
 
