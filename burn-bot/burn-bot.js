@@ -29,10 +29,26 @@ function log(msg) {
   console.log("[" + new Date().toISOString() + "] " + msg);
 }
 
+// ─── GET LIVE PRICE ───────────────────────────────────────────────────────────
+async function getTrollerPriceInSol() {
+  const res = await axios.get(
+    "https://api.dexscreener.com/latest/dex/tokens/" + TROLLER_MINT,
+    { timeout: 8000 }
+  );
+  const price = parseFloat(res.data.pairs[0].priceNative);
+  log("Live price: " + price + " SOL per $TROLLER | 1 SOL = " + (1 / price).toFixed(0) + " $TROLLER");
+  return price;
+}
+
 // ─── SWAP SOL → $TROLLER ──────────────────────────────────────────────────────
-// amount as SOL float, no denominatedInSol — this is what worked
 async function swapSolForTroller(solAmount) {
   log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
+
+  // Get live price → convert SOL to token amount
+  const pricePerToken = await getTrollerPriceInSol();
+  const tokenAmount = solAmount / pricePerToken;
+  log("Requesting: " + tokenAmount.toFixed(2) + " $TROLLER for " + solAmount.toFixed(6) + " SOL");
+
   let serialized = null;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -43,7 +59,7 @@ async function swapSolForTroller(solAmount) {
         {
           action:      "buy",
           mint:        TROLLER_MINT,
-          amount:      solAmount,
+          amount:      tokenAmount,
           slippage:    slippage,
           priorityFee: 0,
           pool:        "pump-amm",
@@ -177,7 +193,7 @@ async function trySweep() {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
   log("╔══════════════════════════════════════╗");
-  log("║      TROLLER BURN BOT v9.0           ║");
+  log("║      TROLLER BURN BOT v10.0          ║");
   log("╚══════════════════════════════════════╝");
   log("Wallet:   " + WALLET.publicKey.toString());
   log("Token:    " + TROLLER_MINT);
