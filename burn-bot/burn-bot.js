@@ -14,8 +14,8 @@ const bs58 = require("bs58");
 const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
 const POLL_MS      = 10000;
 const FEE_RESERVE  = 0.05;   // SOL to keep for fees
-const MIN_SWAP_SOL = 0.02;
-const AMOUNT_FACTOR = 0.95;  // buy 95% of calculated amount (price buffer)
+const MIN_SWAP_SOL = 0.01;
+const CHUNK_SIZE   = 0.05;   // SOL per swap chunk — known to work with PumpPortal
 
 const RPC_URL = process.env.HELIUS_RPC;
 if (!RPC_URL) { console.error("HELIUS_RPC not set"); process.exit(1); }
@@ -30,26 +30,8 @@ function log(msg) {
   console.log("[" + new Date().toISOString() + "] " + msg);
 }
 
-// ─── GET LIVE PRICE ───────────────────────────────────────────────────────────
-async function getTrollerPriceInSol() {
-  const res = await axios.get(
-    "https://api.dexscreener.com/latest/dex/tokens/" + TROLLER_MINT,
-    { timeout: 8000 }
-  );
-  const price = parseFloat(res.data.pairs[0].priceNative);
-  log("Live price: " + price + " SOL per $TROLLER | 1 SOL = " + Math.round(1 / price).toLocaleString() + " $TROLLER");
-  return price;
-}
-
-// ─── SWAP SOL → $TROLLER ──────────────────────────────────────────────────────
-async function swapSolForTroller(solAmount) {
-  log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
-
-  // Get live price, calculate token amount with 5% buffer
-  const pricePerToken = await getTrollerPriceInSol();
-  const tokenAmount = Math.round((solAmount / pricePerToken) * AMOUNT_FACTOR);
-  log("Requesting: " + tokenAmount.toLocaleString() + " $TROLLER for " + solAmount.toFixed(6) + " SOL (95% of max)");
-
+// ─── SINGLE SWAP CHUNK ────────────────────────────────────────────────────────
+async function swapChunk(solAmount) {
   let serialized = null;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -58,30 +40,34 @@ async function swapSolForTroller(solAmount) {
       const res = await axios.post(
         "https://pumpportal.fun/api/trade-local",
         {
-          action:      "buy",
-          mint:        TROLLER_MINT,
-          amount:      tokenAmount,
-          slippage:    slippage,
-          priorityFee: 0,
-          pool:        "pump-amm",
-          publicKey:   WALLET.publicKey.toBase58(),
+          action:           "buy",
+          mint:             TROLLER_MINT,
+          amount:           solAmount,
+          denominatedInSol: "true",
+          slippage:         slippage,
+          priorityFee:      0,
+          pool:             "pump-amm",
+          publicKey:        WALLET.publicKey.toBase58(),
         },
         { responseType: "arraybuffer", timeout: 15000 }
       );
       if (res.data && res.data.byteLength >= 100) {
         serialized = new Uint8Array(res.data);
-        log("PumpPortal quote OK slippage=" + slippage + "% attempt=" + attempt);
+        log("Quote OK slippage=" + slippage + "% attempt=" + attempt);
         break;
       } else {
-        log("PumpPortal small response: " + (res.data ? res.data.byteLength : 0) + " bytes");
+        log("Small response: " + (res.data ? res.data.byteLength : 0) + " bytes");
       }
     } catch (e) {
-      log("PumpPortal attempt " + attempt + " failed: " + e.message);
+      log("Attempt " + attempt + " failed: " + e.message);
       if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
     }
   }
 
-  if (!serialized) throw new Error("PumpPortal: no valid TX after 3 attempts");
+  if (!serialized) {
+    log("No valid TX from PumpPortal for chunk " + solAmount.toFixed(4) + " SOL");
+    return false;
+  }
 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
   const tx = VersionedTransaction.deserialize(serialized);
@@ -92,28 +78,59 @@ async function swapSolForTroller(solAmount) {
     skipPreflight: true,
     maxRetries: 5,
   });
-  log("Swap TX sent: " + sig);
+  log("TX sent: " + sig);
 
-  const deadline = Date.now() + 120000;
+  const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 2000));
     try {
       const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
       if (status && status.value) {
         if (status.value.err) {
-          log("Swap FAILED on-chain: " + JSON.stringify(status.value.err));
+          log("TX FAILED: " + JSON.stringify(status.value.err));
           return false;
         }
         const conf = status.value.confirmationStatus;
         if (conf === "confirmed" || conf === "finalized") {
-          log("Swap confirmed -> https://solscan.io/tx/" + sig);
+          log("Confirmed -> https://solscan.io/tx/" + sig);
           return true;
         }
       }
     } catch (e) {}
   }
-  log("Swap timeout -> https://solscan.io/tx/" + sig);
+  log("TX timeout -> https://solscan.io/tx/" + sig);
   return false;
+}
+
+// ─── SWAP SOL → $TROLLER (chunked) ───────────────────────────────────────────
+async function swapSolForTroller(solAmount) {
+  const chunks = Math.ceil(solAmount / CHUNK_SIZE);
+  log("Swapping " + solAmount.toFixed(6) + " SOL in " + chunks + " chunk(s) of max " + CHUNK_SIZE + " SOL each");
+
+  let remaining = solAmount;
+  let anySuccess = false;
+
+  while (remaining >= MIN_SWAP_SOL) {
+    const chunk = parseFloat(Math.min(remaining, CHUNK_SIZE).toFixed(6));
+    log("--- Chunk: " + chunk.toFixed(6) + " SOL (remaining: " + remaining.toFixed(6) + " SOL) ---");
+
+    const ok = await swapChunk(chunk);
+    if (ok) {
+      anySuccess = true;
+      remaining = parseFloat((remaining - chunk).toFixed(6));
+      if (remaining >= MIN_SWAP_SOL) {
+        await new Promise(r => setTimeout(r, 3000)); // short pause between chunks
+      }
+    } else {
+      log("Chunk failed — stopping swap");
+      break;
+    }
+  }
+
+  if (anySuccess) {
+    log("Swap done — " + (solAmount - remaining).toFixed(6) + " SOL swapped, " + remaining.toFixed(6) + " SOL remaining");
+  }
+  return anySuccess;
 }
 
 // ─── BURN $TROLLER ────────────────────────────────────────────────────────────
@@ -160,7 +177,7 @@ async function trySweep() {
   try {
     const balance = await connection.getBalance(WALLET.publicKey);
     const balanceSOL = balance / LAMPORTS_PER_SOL;
-    const swappableSOL = balanceSOL - FEE_RESERVE;
+    const swappableSOL = parseFloat((balanceSOL - FEE_RESERVE).toFixed(6));
 
     if (swappableSOL < MIN_SWAP_SOL) {
       log("Balance: " + balanceSOL.toFixed(6) + " SOL — waiting for SOL...");
@@ -193,14 +210,13 @@ async function trySweep() {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 async function main() {
   log("╔══════════════════════════════════════╗");
-  log("║      TROLLER BURN BOT v11.0          ║");
+  log("║      TROLLER BURN BOT v12.0          ║");
   log("╚══════════════════════════════════════╝");
-  log("Wallet:   " + WALLET.publicKey.toString());
-  log("Token:    " + TROLLER_MINT);
-  log("Reserve:  " + FEE_RESERVE + " SOL");
-  log("Min swap: " + MIN_SWAP_SOL + " SOL");
-  log("Factor:   " + (AMOUNT_FACTOR * 100) + "% of calculated amount");
-  log("Poll:     every " + (POLL_MS / 1000) + "s");
+  log("Wallet:     " + WALLET.publicKey.toString());
+  log("Token:      " + TROLLER_MINT);
+  log("Reserve:    " + FEE_RESERVE + " SOL");
+  log("Chunk size: " + CHUNK_SIZE + " SOL per swap");
+  log("Poll:       every " + (POLL_MS / 1000) + "s");
   log("");
 
   if (WALLET.publicKey.toString() !== "4jmogAxLmsQ54rJsRVQCAgeHt2ivgG8c8dkimjzFjWXB") {
