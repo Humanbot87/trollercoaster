@@ -13,7 +13,7 @@ const bs58 = require("bs58");
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const TROLLER_MINT = "DDSnK25736sBknvGncjW43sxbWqHa155AihgBH4Npump";
 const POLL_MS      = 10000;
-const FEE_RESERVE  = 0.05;   // SOL to keep for fees
+const FEE_RESERVE  = 0.1;    // SOL to keep for fees (PumpPortal needs extra buffer)
 const MIN_SWAP_SOL = 0.02;   // minimum SOL to trigger swap
 
 const RPC_URL = process.env.HELIUS_RPC;
@@ -36,7 +36,7 @@ async function getTrollerPriceInSol() {
     { timeout: 8000 }
   );
   const price = parseFloat(res.data.pairs[0].priceNative);
-  log("Live price: " + price + " SOL per $TROLLER | 1 SOL = " + (1 / price).toFixed(0) + " $TROLLER");
+  log("Live price: " + price + " SOL per $TROLLER | 1 SOL = " + Math.round(1 / price).toLocaleString() + " $TROLLER");
   return price;
 }
 
@@ -44,10 +44,10 @@ async function getTrollerPriceInSol() {
 async function swapSolForTroller(solAmount) {
   log("Swapping " + solAmount.toFixed(6) + " SOL -> $TROLLER via PumpPortal...");
 
-  // Get live price → convert SOL to token amount
+  // Get live price and convert SOL to token amount
   const pricePerToken = await getTrollerPriceInSol();
   const tokenAmount = solAmount / pricePerToken;
-  log("Requesting: " + tokenAmount.toFixed(2) + " $TROLLER for " + solAmount.toFixed(6) + " SOL");
+  log("Requesting: " + Math.round(tokenAmount).toLocaleString() + " $TROLLER for " + solAmount.toFixed(6) + " SOL");
 
   let serialized = null;
 
@@ -101,7 +101,12 @@ async function swapSolForTroller(solAmount) {
       const status = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
       if (status && status.value) {
         if (status.value.err) {
-          log("Swap FAILED on-chain: " + JSON.stringify(status.value.err));
+          // Check if it's insufficient lamports — increase reserve and retry
+          const errStr = JSON.stringify(status.value.err);
+          log("Swap FAILED on-chain: " + errStr);
+          if (errStr.includes("Custom") && errStr.includes("1")) {
+            log("Hint: insufficient lamports — try increasing FEE_RESERVE");
+          }
           return false;
         }
         const conf = status.value.confirmationStatus;
@@ -169,7 +174,7 @@ async function trySweep() {
 
     isProcessing = true;
     log("=== SWEEP START ===");
-    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL");
+    log("Balance: " + balanceSOL.toFixed(6) + " SOL | Swapping: " + swappableSOL.toFixed(6) + " SOL | Reserve: " + FEE_RESERVE + " SOL");
 
     const swapOk = await swapSolForTroller(swappableSOL);
 
