@@ -87,6 +87,10 @@
       .nav-buy { padding: 7px 14px; font-size: 0.75rem; }
       .nav-logo { font-size: 0.95rem; }
       .hero-nft-strip { flex-direction: column; gap: 10px; }
+      .countdown-unit { min-width: 48px; padding: 8px 4px; }
+      .countdown-unit .num { font-size: 1.1rem; }
+      .wallet-check { flex-direction: column; align-items: stretch; padding: 14px; }
+      .btn-check { width: 100%; justify-content: center; }
     }
     @media(max-width: 400px) {
       .token-grid { grid-template-columns: 1fr; }
@@ -229,6 +233,27 @@
     }
     .hero-nft-badge.pink { border-color: rgba(255,0,255,0.28); background: rgba(255,0,255,0.06); }
     .hero-nft-badge.cyan { border-color: rgba(0,255,255,0.22); background: rgba(0,255,255,0.04); }
+
+    /* TROLL REWARDS */
+    .rewards-card { max-width: 530px; margin: 20px auto 0; }
+    .rewards-title { font-family: 'Orbitron', sans-serif; font-size: 1.05rem; font-weight: 700; text-align: center; margin-bottom: 6px; letter-spacing: 0.5px; color: #fff; position: relative; z-index: 1; }
+    .rewards-desc { font-family: 'Rajdhani', sans-serif; font-size: 0.9rem; line-height: 1.6; color: rgba(220,200,240,0.78); text-align: center; margin-bottom: 20px; position: relative; z-index: 1; }
+    .countdown-label { font-family: 'Share Tech Mono', monospace; font-size: 0.65rem; letter-spacing: 2px; color: var(--pink); text-align: center; margin-bottom: 10px; position: relative; z-index: 1; }
+    .countdown-grid { display: flex; justify-content: center; gap: 10px; margin-bottom: 8px; position: relative; z-index: 1; }
+    .countdown-unit { background: #000; border: 1px solid var(--neon); border-radius: 10px; padding: 10px 6px; min-width: 58px; text-align: center; }
+    .countdown-unit .num { font-family: 'Orbitron', sans-serif; font-size: 1.3rem; font-weight: 900; color: var(--cyan); text-shadow: 0 0 10px var(--cyan); display: block; }
+    .countdown-unit .lbl { font-family: 'Share Tech Mono', monospace; font-size: 0.55rem; letter-spacing: 1px; color: rgba(220,200,240,0.6); margin-top: 2px; display: block; }
+    .countdown-sub { text-align: center; font-family: 'Share Tech Mono', monospace; font-size: 0.68rem; letter-spacing: 1px; color: rgba(157,0,255,0.55); margin-bottom: 22px; position: relative; z-index: 1; }
+    .wallet-check { display: flex; gap: 10px; flex-wrap: wrap; background: #000; border: 1px solid var(--neon); border-radius: 12px; padding: 8px 8px 8px 16px; align-items: center; position: relative; z-index: 1; }
+    .wallet-input { flex: 1; min-width: 160px; background: transparent; border: none; outline: none; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.8rem; padding: 8px 0; }
+    .wallet-input::placeholder { color: rgba(224,208,240,0.35); }
+    .btn-check { background: var(--neon); color: #fff; border: none; padding: 10px 20px; border-radius: 20px; font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 0.72rem; letter-spacing: 1px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .btn-check:hover { background: var(--pink); box-shadow: 0 0 18px var(--pink); }
+    .btn-check:disabled { opacity: 0.5; cursor: wait; }
+    .reward-result { font-family: 'Share Tech Mono', monospace; font-size: 0.85rem; text-align: center; position: relative; z-index: 1; max-height: 0; overflow: hidden; transition: all 0.3s; }
+    .reward-result.show { margin-top: 14px; max-height: 80px; }
+    .reward-amount { font-family: 'Orbitron', sans-serif; font-size: 1.6rem; font-weight: 900; color: var(--cyan); text-shadow: 0 0 14px var(--cyan); }
+    .reward-error { color: var(--pink); font-size: 0.78rem; }
 
     /* TICKER */
     .ticker-wrap {
@@ -509,6 +534,33 @@
         <svg class="icon" width="13" height="13" style="color:#fff"><use href="#i-copy"/></svg>
         COPY CA
       </button>
+    </div>
+
+    <!-- TROLL REWARDS CARD — embedded right below CA -->
+    <div id="rewards" class="hero-nft-card rewards-card fade-up" style="margin-top:20px;">
+      <div class="hero-nft-header">
+        <svg class="icon" width="16" height="16" style="color:var(--neon)"><use href="#i-troll"/></svg>
+        <span>TROLL REWARDS</span>
+        <span class="powered">WEEKLY HOLDER PAYOUT</span>
+      </div>
+
+      <h3 class="rewards-title">HOLD <span class="brand-troller">TROLLER</span><span class="brand-coaster">COASTER</span> GET <span style="color:var(--pink);">TROLL</span></h3>
+      <p class="rewards-desc">Every week $TROLLER holders get rewarded with $TROLL. Snapshot taken automatically — just hold in your wallet.</p>
+
+      <div class="countdown-label">NEXT TROLL DROP IN</div>
+      <div class="countdown-grid">
+        <div class="countdown-unit"><span class="num" id="cd-days">00</span><span class="lbl">DAYS</span></div>
+        <div class="countdown-unit"><span class="num" id="cd-hours">00</span><span class="lbl">HRS</span></div>
+        <div class="countdown-unit"><span class="num" id="cd-mins">00</span><span class="lbl">MIN</span></div>
+        <div class="countdown-unit"><span class="num" id="cd-secs">00</span><span class="lbl">SEC</span></div>
+      </div>
+      <div class="countdown-sub">Every Monday · 17:00 UTC</div>
+
+      <div class="wallet-check">
+        <input type="text" id="reward-wallet" class="wallet-input" placeholder="Paste your wallet address..." autocomplete="off" spellcheck="false">
+        <button id="reward-btn" class="btn-check" onclick="checkRewards()">CHECK TROLL</button>
+      </div>
+      <div id="reward-result" class="reward-result"></div>
     </div>
 
     <!-- NFT MINT CARD — embedded right below CA -->
@@ -909,6 +961,69 @@
     ), i*100);
     toast('PROBLEM?');
   });
+  // Worker base confirmed by site owner; path/query below is a best guess — adjust if your route differs
+  const REWARDS_API_BASE = 'https://trollercoaster.thehouseprotocolsol26.workers.dev';
+  const REWARDS_API_PATH = '/rewards';
+
+  function nextDropUTC() {
+    const now = new Date();
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 17, 0, 0, 0));
+    const day = next.getUTCDay();
+    let diff = (1 - day + 7) % 7;
+    if (diff === 0 && now.getTime() >= next.getTime()) diff = 7;
+    next.setUTCDate(next.getUTCDate() + diff);
+    return next;
+  }
+  function updateCountdown() {
+    const diff = Math.max(0, nextDropUTC().getTime() - Date.now());
+    const pad = n => String(n).padStart(2, '0');
+    document.getElementById('cd-days').textContent = pad(Math.floor(diff / 86400000));
+    document.getElementById('cd-hours').textContent = pad(Math.floor((diff % 86400000) / 3600000));
+    document.getElementById('cd-mins').textContent = pad(Math.floor((diff % 3600000) / 60000));
+    document.getElementById('cd-secs').textContent = pad(Math.floor((diff % 60000) / 1000));
+  }
+  updateCountdown();
+  setInterval(updateCountdown, 1000);
+
+  function isLikelySolanaAddress(addr) {
+    return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+  }
+
+  async function checkRewards() {
+    const input = document.getElementById('reward-wallet');
+    const btn = document.getElementById('reward-btn');
+    const result = document.getElementById('reward-result');
+    const wallet = input.value.trim();
+
+    if (!isLikelySolanaAddress(wallet)) {
+      result.innerHTML = '<span class="reward-error">That doesn\'t look like a valid Solana wallet. Problem?</span>';
+      result.classList.add('show');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'CHECKING...';
+    result.innerHTML = '<span style="color:rgba(220,200,240,0.6)">Fetching your $TROLL rewards...</span>';
+    result.classList.add('show');
+
+    try {
+      const res = await fetch(REWARDS_API_BASE + REWARDS_API_PATH + '?wallet=' + encodeURIComponent(wallet));
+      if (!res.ok) throw new Error('Request failed');
+      const data = await res.json();
+      const amount = data.total ?? data.amount ?? data.troll ?? data.rewards ?? data.balance ?? 0;
+      const formatted = Number(amount).toLocaleString(undefined, { maximumFractionDigits: 2 });
+      result.innerHTML = 'YOU HAVE RECEIVED<br><span class="reward-amount">' + formatted + ' $TROLL</span>';
+    } catch (e) {
+      result.innerHTML = '<span class="reward-error">Could not reach the rewards system right now. Try again later. Problem?</span>';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'CHECK TROLL';
+    }
+  }
+  document.getElementById('reward-wallet').addEventListener('keydown', e => {
+    if (e.key === 'Enter') checkRewards();
+  });
+
   const dexIframe = document.getElementById('dex-iframe');
   const dexObs = new IntersectionObserver((entries) => {
     if (entries[0].isIntersecting) {
