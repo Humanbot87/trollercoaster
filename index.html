@@ -962,9 +962,9 @@
     ), i*100);
     toast('PROBLEM?');
   });
-  // Worker base confirmed by site owner; path/query below is a best guess — adjust if your route differs
+  // Standalone trollercoaster-rewards-worker.js (TROLL_KV), not the BRAINDRAIN worker
   const REWARDS_API_BASE = 'https://trollercoaster.thehouseprotocolsol26.workers.dev';
-  const REWARDS_API_PATH = '/rewards';
+  const REWARDS_API_PATH = '/troll/rewards';
 
   function nextDropUTC() {
     const now = new Date();
@@ -1009,13 +1009,16 @@
 
     try {
       const res = await fetch(REWARDS_API_BASE + REWARDS_API_PATH + '?wallet=' + encodeURIComponent(wallet));
-      if (!res.ok) throw new Error('Request failed');
       const data = await res.json();
-      const amount = data.total ?? data.amount ?? data.troll ?? data.rewards ?? data.balance ?? 0;
-      const formatted = Number(amount).toLocaleString(undefined, { maximumFractionDigits: 2 });
-      result.innerHTML = 'YOU HAVE RECEIVED<br><span class="reward-amount">' + formatted + ' $TROLL</span>';
+      if (!res.ok) throw new Error(data?.error || 'Request failed');
+      const formatted = Number(data.totalTrollReceived || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+      const lastPayout = (data.history || []).slice(-1)[0];
+      const lastLine = lastPayout
+        ? '<div style="font-size:0.7rem;color:rgba(220,200,240,0.5);margin-top:6px;">Last drop: ' + new Date(lastPayout.ts).toLocaleDateString() + '</div>'
+        : '';
+      result.innerHTML = 'YOU HAVE RECEIVED<br><span class="reward-amount">' + formatted + ' $TROLL</span>' + lastLine;
     } catch (e) {
-      result.innerHTML = '<span class="reward-error">Could not reach the rewards system right now. Try again later. Problem?</span>';
+      result.innerHTML = '<span class="reward-error">' + (e.message || 'Could not reach the rewards system right now.') + ' Problem?</span>';
     } finally {
       btn.disabled = false;
       btn.textContent = 'CHECK TROLL';
