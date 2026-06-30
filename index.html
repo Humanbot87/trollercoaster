@@ -1189,9 +1189,12 @@
           { label: 'Weight', render: r => Number(r.weight).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
         ]);
       } else {
+        const sentCount = data.results.filter(r => r.status === 'sent').length;
+        const errorCount = data.results.filter(r => r.status === 'error').length;
         trollAdminSetStatus(
-          'SENT — ' + data.holders + ' holders paid · ' + Number(data.receivedTroll).toLocaleString(undefined, { maximumFractionDigits: 2 }) +
-          ' $TROLL distributed · swap ' + shortStr(data.swapSig), 'ok'
+          'SENT — ' + sentCount + '/' + data.holders + ' holders paid' + (errorCount ? ' (' + errorCount + ' failed)' : '') + ' · ' +
+          Number(data.receivedTroll).toLocaleString(undefined, { maximumFractionDigits: 2 }) +
+          ' $TROLL distributed · swap ' + shortStr(data.swapSig), errorCount ? 'err' : 'ok'
         );
         trollAdminRenderTable(data.results, [
           { label: 'Wallet', render: r => shortStr(r.wallet) },
