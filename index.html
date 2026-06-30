@@ -1179,7 +1179,7 @@
           Number(data.treasury?.trollBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL' +
           (data.estimatedTroll != null
             ? ' · est. ' + Number(data.estimatedTroll).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL from swap (Jupiter quote, actual amount may vary with slippage)'
-            : ' · could not get a Jupiter quote for the estimate'), 'ok'
+            : ' · could not get a Jupiter quote for the estimate' + (data.estimatedTrollError ? ' (' + data.estimatedTrollError + ')' : '')), 'ok'
         );
         trollAdminRenderTable(data.weighted, [
           { label: 'Wallet', render: r => shortStr(r.wallet) },
