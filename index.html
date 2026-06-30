@@ -264,8 +264,8 @@
     .troll-admin-toggle a:hover { color: var(--pink); }
     .troll-admin-box { display: none; margin-top: 16px; position: relative; z-index: 1; }
     .troll-admin-box.open { display: block; }
-    .troll-admin-key-row { margin-bottom: 12px; }
-    .troll-admin-key-row input { width: 100%; background: #000; border: 1px solid var(--neon); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.78rem; outline: none; }
+    .troll-admin-key-row { margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .troll-admin-key-row input { width: 100%; background: #000; border: 1px solid var(--neon); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.78rem; outline: none; box-sizing: border-box; }
     .troll-admin-key-row input::placeholder { color: rgba(224,208,240,0.35); }
     .troll-admin-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
     .btn-admin { flex: 1 1 auto; background: transparent; border: 1px solid var(--neon); color: var(--text); padding: 8px 12px; border-radius: 16px; font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 0.62rem; letter-spacing: 0.5px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
@@ -593,6 +593,7 @@
       <div id="troll-admin-box" class="troll-admin-box">
         <div class="troll-admin-key-row">
           <input type="password" id="troll-admin-key" placeholder="Admin key" autocomplete="off">
+          <input type="number" id="troll-payout-pool" placeholder="SOL pool for this run (blank = use TROLL_SOL_POOL)" step="0.01" min="0.001">
         </div>
         <div class="troll-admin-actions">
           <button class="btn-admin" onclick="trollAdminLoadStatus()">TREASURY STATUS</button>
@@ -1151,15 +1152,20 @@
     if (trollAdminBusy) return;
     const key = document.getElementById('troll-admin-key').value.trim();
     if (!key) { trollAdminSetStatus('Enter admin key first.', 'err'); return; }
-    if (!dryRun && !confirm('This swaps real SOL into $TROLL and sends it to every qualifying holder right now. Continue?')) return;
+    const poolInput = document.getElementById('troll-payout-pool').value.trim();
+    const poolSol = poolInput ? parseFloat(poolInput) : null;
+    if (poolInput && (!poolSol || poolSol <= 0)) { trollAdminSetStatus('Enter a valid SOL pool amount, or leave it blank to use TROLL_SOL_POOL.', 'err'); return; }
+    if (!dryRun && !confirm(poolSol ? `Send ${poolSol} SOL to all eligible holders right now? This cannot be undone.` : 'This swaps real SOL into $TROLL and sends it to every qualifying holder right now. Continue?')) return;
     trollAdminSetBusy(true);
     trollAdminSetStatus(dryRun ? 'Running dry-run payout...' : 'Sending payout — swapping SOL and paying holders...');
     document.getElementById('troll-admin-table-wrap').innerHTML = '';
     try {
+      const body = { adminKey: key, dryRun: !!dryRun };
+      if (poolSol) body.poolSol = poolSol;
       const res = await fetch(REWARDS_API_BASE + TROLL_ADMIN_PAYOUT_PATH, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adminKey: key, dryRun: !!dryRun }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Request failed');
