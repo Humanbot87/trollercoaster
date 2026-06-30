@@ -1176,12 +1176,16 @@
         trollAdminSetStatus(
           'DRY RUN — ' + data.holders + ' qualifying / ' + data.rawHolders + ' total holders · pool ' + data.pool + ' SOL · treasury ' +
           Number(data.treasury?.balanceSol || 0).toFixed(4) + ' SOL, ' +
-          Number(data.treasury?.trollBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL', 'ok'
+          Number(data.treasury?.trollBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL' +
+          (data.estimatedTroll != null
+            ? ' · est. ' + Number(data.estimatedTroll).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL from swap (Jupiter quote, actual amount may vary with slippage)'
+            : ' · could not get a Jupiter quote for the estimate'), 'ok'
         );
         trollAdminRenderTable(data.weighted, [
           { label: 'Wallet', render: r => shortStr(r.wallet) },
           { label: 'Balance', render: r => Number(r.balance).toLocaleString(undefined, { maximumFractionDigits: 0 }) },
           { label: 'Streak', render: r => r.streak + 'd' },
+          { label: 'Est. $TROLL', render: r => r.estTroll != null ? Number(r.estTroll).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—' },
           { label: 'Weight', render: r => Number(r.weight).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
         ]);
       } else {
