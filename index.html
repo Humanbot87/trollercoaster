@@ -92,6 +92,8 @@
       .wallet-check { flex-direction: column; align-items: stretch; padding: 14px; }
       .wallet-input { font-size: 0.72rem; padding: 10px 0; }
       .btn-check { width: 100%; justify-content: center; }
+      .troll-admin-actions { flex-direction: column; }
+      .btn-admin { width: 100%; }
     }
     @media(max-width: 400px) {
       .token-grid { grid-template-columns: 1fr; }
@@ -255,6 +257,30 @@
     .reward-result.show { margin-top: 14px; max-height: 80px; }
     .reward-amount { font-family: 'Orbitron', sans-serif; font-size: 1.6rem; font-weight: 900; color: var(--cyan); text-shadow: 0 0 14px var(--cyan); }
     .reward-error { color: var(--pink); font-size: 0.78rem; }
+
+    /* TROLL REWARDS — ADMIN PANEL */
+    .troll-admin-toggle { text-align: center; margin-top: 18px; position: relative; z-index: 1; }
+    .troll-admin-toggle a { font-family: 'Share Tech Mono', monospace; font-size: 0.62rem; letter-spacing: 2px; color: rgba(220,200,240,0.35); text-decoration: none; }
+    .troll-admin-toggle a:hover { color: var(--pink); }
+    .troll-admin-box { display: none; margin-top: 16px; position: relative; z-index: 1; }
+    .troll-admin-box.open { display: block; }
+    .troll-admin-key-row { margin-bottom: 12px; }
+    .troll-admin-key-row input { width: 100%; background: #000; border: 1px solid var(--neon); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'Share Tech Mono', monospace; font-size: 0.78rem; outline: none; }
+    .troll-admin-key-row input::placeholder { color: rgba(224,208,240,0.35); }
+    .troll-admin-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .btn-admin { flex: 1 1 auto; background: transparent; border: 1px solid var(--neon); color: var(--text); padding: 8px 12px; border-radius: 16px; font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 0.62rem; letter-spacing: 0.5px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+    .btn-admin:hover { border-color: var(--pink); color: var(--pink); }
+    .btn-admin:disabled { opacity: 0.5; cursor: wait; }
+    .btn-admin.go { background: var(--neon); border-color: var(--neon); color: #fff; }
+    .btn-admin.go:hover { background: var(--pink); border-color: var(--pink); box-shadow: 0 0 14px var(--pink); }
+    .troll-admin-status { font-family: 'Share Tech Mono', monospace; font-size: 0.75rem; color: rgba(220,200,240,0.7); margin-bottom: 10px; min-height: 1em; word-break: break-word; }
+    .troll-admin-status.err { color: var(--pink); }
+    .troll-admin-status.ok { color: var(--cyan); }
+    .troll-admin-table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+    .troll-admin-table { width: 100%; border-collapse: collapse; font-family: 'Share Tech Mono', monospace; font-size: 0.68rem; }
+    .troll-admin-table th { font-size: 0.56rem; text-transform: uppercase; letter-spacing: 1px; color: rgba(220,200,240,0.5); text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); background: rgba(157,0,255,0.08); white-space: nowrap; }
+    .troll-admin-table td { padding: 7px 10px; border-bottom: 1px solid rgba(157,0,255,0.1); color: var(--text); white-space: nowrap; }
+    .troll-admin-table tr:hover td { background: rgba(157,0,255,0.04); }
 
     /* TICKER */
     .ticker-wrap {
@@ -562,6 +588,21 @@
         <button id="reward-btn" class="btn-check" onclick="checkRewards()">CHECK TROLL</button>
       </div>
       <div id="reward-result" class="reward-result"></div>
+
+      <div class="troll-admin-toggle"><a href="#" onclick="trollAdminToggle();return false" id="troll-admin-link">ADMIN</a></div>
+      <div id="troll-admin-box" class="troll-admin-box">
+        <div class="troll-admin-key-row">
+          <input type="password" id="troll-admin-key" placeholder="Admin key" autocomplete="off">
+        </div>
+        <div class="troll-admin-actions">
+          <button class="btn-admin" onclick="trollAdminLoadStatus()">TREASURY STATUS</button>
+          <button class="btn-admin" onclick="trollAdminSnapshot()">SNAPSHOT STREAKS</button>
+          <button class="btn-admin" onclick="trollAdminPayoutDryRun()">DRY RUN PAYOUT</button>
+          <button class="btn-admin go" onclick="trollAdminPayoutSend()">SEND PAYOUT</button>
+        </div>
+        <div id="troll-admin-status" class="troll-admin-status"></div>
+        <div id="troll-admin-table-wrap"></div>
+      </div>
     </div>
 
     <!-- NFT MINT CARD — embedded right below CA -->
@@ -1027,6 +1068,135 @@
   document.getElementById('reward-wallet').addEventListener('keydown', e => {
     if (e.key === 'Enter') checkRewards();
   });
+
+  // ─── TROLL REWARDS ADMIN (treasury status, snapshot, payout) ────────────────
+  const TROLL_ADMIN_SNAPSHOT_PATH = '/troll/admin/snapshot';
+  const TROLL_ADMIN_PAYOUT_PATH = '/troll/admin/payout';
+  const TROLL_ADMIN_STATUS_PATH = '/troll/admin/status';
+  let trollAdminBusy = false;
+
+  function trollAdminToggle() {
+    document.getElementById('troll-admin-box').classList.toggle('open');
+  }
+
+  function trollAdminSetStatus(msg, cls) {
+    const el = document.getElementById('troll-admin-status');
+    el.textContent = msg;
+    el.className = 'troll-admin-status' + (cls ? ' ' + cls : '');
+  }
+
+  function trollAdminSetBusy(busy) {
+    trollAdminBusy = busy;
+    document.querySelectorAll('#troll-admin-box .btn-admin').forEach(b => b.disabled = busy);
+  }
+
+  function shortStr(s) {
+    return s ? s.slice(0, 4) + '…' + s.slice(-4) : '—';
+  }
+
+  function trollAdminRenderTable(rows, columns) {
+    const wrap = document.getElementById('troll-admin-table-wrap');
+    if (!rows || !rows.length) { wrap.innerHTML = ''; return; }
+    const thead = '<tr>' + columns.map(c => '<th>' + c.label + '</th>').join('') + '</tr>';
+    const tbody = rows.map(r => '<tr>' + columns.map(c => '<td>' + c.render(r) + '</td>').join('') + '</tr>').join('');
+    wrap.innerHTML = '<div class="troll-admin-table-wrap"><table class="troll-admin-table"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table></div>';
+  }
+
+  async function trollAdminLoadStatus() {
+    if (trollAdminBusy) return;
+    const key = document.getElementById('troll-admin-key').value.trim();
+    if (!key) { trollAdminSetStatus('Enter admin key first.', 'err'); return; }
+    trollAdminSetBusy(true);
+    trollAdminSetStatus('Loading treasury status...');
+    document.getElementById('troll-admin-table-wrap').innerHTML = '';
+    try {
+      const res = await fetch(REWARDS_API_BASE + TROLL_ADMIN_STATUS_PATH + '?adminKey=' + encodeURIComponent(key));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Request failed');
+      trollAdminSetStatus(
+        'Treasury ' + shortStr(data.address) + ' — ' + Number(data.balanceSol).toFixed(4) + ' SOL, ' +
+        Number(data.trollBalance).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL', 'ok'
+      );
+    } catch (e) {
+      trollAdminSetStatus(e.message || 'Could not reach the worker.', 'err');
+    } finally {
+      trollAdminSetBusy(false);
+    }
+  }
+
+  async function trollAdminSnapshot() {
+    if (trollAdminBusy) return;
+    const key = document.getElementById('troll-admin-key').value.trim();
+    if (!key) { trollAdminSetStatus('Enter admin key first.', 'err'); return; }
+    trollAdminSetBusy(true);
+    trollAdminSetStatus('Snapshotting holder streaks...');
+    document.getElementById('troll-admin-table-wrap').innerHTML = '';
+    try {
+      const res = await fetch(REWARDS_API_BASE + TROLL_ADMIN_SNAPSHOT_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: key }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Request failed');
+      trollAdminSetStatus('Snapshot done — ' + data.holders + ' holders updated.', 'ok');
+    } catch (e) {
+      trollAdminSetStatus(e.message || 'Could not reach the worker.', 'err');
+    } finally {
+      trollAdminSetBusy(false);
+    }
+  }
+
+  async function trollAdminPayout(dryRun) {
+    if (trollAdminBusy) return;
+    const key = document.getElementById('troll-admin-key').value.trim();
+    if (!key) { trollAdminSetStatus('Enter admin key first.', 'err'); return; }
+    if (!dryRun && !confirm('This swaps real SOL into $TROLL and sends it to every qualifying holder right now. Continue?')) return;
+    trollAdminSetBusy(true);
+    trollAdminSetStatus(dryRun ? 'Running dry-run payout...' : 'Sending payout — swapping SOL and paying holders...');
+    document.getElementById('troll-admin-table-wrap').innerHTML = '';
+    try {
+      const res = await fetch(REWARDS_API_BASE + TROLL_ADMIN_PAYOUT_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ adminKey: key, dryRun: !!dryRun }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Request failed');
+
+      if (data.skipped) {
+        trollAdminSetStatus('Skipped: ' + data.reason, 'err');
+      } else if (data.dryRun) {
+        trollAdminSetStatus(
+          'DRY RUN — ' + data.holders + ' qualifying / ' + data.rawHolders + ' total holders · pool ' + data.pool + ' SOL · treasury ' +
+          Number(data.treasury?.balanceSol || 0).toFixed(4) + ' SOL, ' +
+          Number(data.treasury?.trollBalance || 0).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' $TROLL', 'ok'
+        );
+        trollAdminRenderTable(data.weighted, [
+          { label: 'Wallet', render: r => shortStr(r.wallet) },
+          { label: 'Balance', render: r => Number(r.balance).toLocaleString(undefined, { maximumFractionDigits: 0 }) },
+          { label: 'Streak', render: r => r.streak + 'd' },
+          { label: 'Weight', render: r => Number(r.weight).toLocaleString(undefined, { maximumFractionDigits: 2 }) },
+        ]);
+      } else {
+        trollAdminSetStatus(
+          'SENT — ' + data.holders + ' holders paid · ' + Number(data.receivedTroll).toLocaleString(undefined, { maximumFractionDigits: 2 }) +
+          ' $TROLL distributed · swap ' + shortStr(data.swapSig), 'ok'
+        );
+        trollAdminRenderTable(data.results, [
+          { label: 'Wallet', render: r => shortStr(r.wallet) },
+          { label: 'Status', render: r => r.status },
+          { label: 'Detail', render: r => r.txid ? shortStr(r.txid) : (r.error || r.reason || '—') },
+        ]);
+      }
+    } catch (e) {
+      trollAdminSetStatus(e.message || 'Could not reach the worker.', 'err');
+    } finally {
+      trollAdminSetBusy(false);
+    }
+  }
+  function trollAdminPayoutDryRun() { trollAdminPayout(true); }
+  function trollAdminPayoutSend() { trollAdminPayout(false); }
 
   const dexIframe = document.getElementById('dex-iframe');
   const dexObs = new IntersectionObserver((entries) => {
